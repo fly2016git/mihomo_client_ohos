@@ -3,6 +3,7 @@
 /local.properties
 /.DS_Store
 /core/mihomo-python/
+/design/
 /.idea
 **/build
 /.hvigor
