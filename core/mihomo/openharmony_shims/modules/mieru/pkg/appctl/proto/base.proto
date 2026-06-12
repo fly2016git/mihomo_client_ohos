@@ -1,0 +1,205 @@
+// Copyright (C) 2024  mieru authors
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+syntax = "proto3";
+
+package mieru.appctl;
+
+option go_package = "github.com/enfein/mieru/v3/pkg/appctl/appctlpb";
+
+message AppStatusMsg {
+    optional AppStatus status = 1;
+}
+
+enum AppStatus {
+    UNKNOWN = 0;
+
+    // RPC service is available, but proxy is not started.
+    IDLE = 1;
+
+    // Proxy is starting.
+    STARTING = 2;
+
+    // Proxy is running.
+    RUNNING = 3;
+
+    // Proxy is being stopped.
+    STOPPING = 4;
+}
+
+enum LoggingLevel {
+    DEFAULT = 0;
+    FATAL = 1;
+    ERROR = 2;
+    WARN = 3;
+    INFO = 4;
+    DEBUG = 5;
+    TRACE = 6;
+}
+
+enum DualStack {
+    USE_FIRST_IP = 0;
+    PREFER_IPv4 = 1;
+    PREFER_IPv6 = 2;
+    ONLY_IPv4 = 3;
+    ONLY_IPv6 = 4;
+}
+
+message PortBinding {
+    // A single port number.
+    // This field can't be set with portRange at the same time.
+    optional int32 port = 1;
+
+    optional TransportProtocol protocol = 2;
+
+    // A port number range.
+    // For example, "8000-9000" contains 1001 ports from 8000 to 9000.
+    // This field can't be set with port at the same time.
+    optional string portRange = 3;
+}
+
+enum TransportProtocol {
+    UNKNOWN_TRANSPORT_PROTOCOL = 0;
+    UDP = 1;
+    TCP = 2;
+}
+
+enum ProxyProtocol {
+    UNKNOWN_PROXY_PROTOCOL = 0;
+    SOCKS5_PROXY_PROTOCOL = 1;
+}
+
+message User {
+
+    // User name is also the ID of user.
+    // Typically this is an email address.
+    optional string name = 1;
+
+    // Raw password.
+    // For safety this shouldn't be persisted at the server side.
+    optional string password = 2;
+
+    // Hashed password.
+    // Stored with hex encoding.
+    optional string hashedPassword = 3;
+
+    // User quotas.
+    // This field has no effect at the client side.
+    repeated Quota quotas = 4;
+
+    // Allow user to use private IP as the destination.
+    // This field has no effect at the client side.
+    optional bool allowPrivateIP = 5;
+
+    // Allow user to use loopback IP as the destination.
+    // This field has no effect at the client side.
+    optional bool allowLoopbackIP = 6;
+}
+
+message Quota {
+
+    // Number of days to renew the quota.
+    // The renew is rolling based.
+    optional int32 days = 1;
+
+    // Number of megabytes the user allowed to send and receive.
+    optional int32 megabytes = 2;
+}
+
+message Auth {
+
+    // Username used for authentication.
+    optional string user = 1;
+
+    // Password used for authentication.
+    optional string password = 2;
+}
+
+message TrafficPattern {
+
+    // Generate stable implicit traffic patterns that are not explictly set.
+    // Generated traffic patterns are also influenced by "unlockAll" below.
+    optional int32 seed = 1;
+
+    // If true, implicit traffic patterns can use all possible options,
+    // which may not be desired. Otherwise, implicit traffic patterns
+    // only use limited options.
+    // All explicitly set traffic patterns are available regardless of this.
+    optional bool unlockAll = 2;
+
+    // Split TCP packets by fragmentation.
+    optional TCPFragment tcpFragment = 3;
+
+    // Manipulate nonce prefix.
+    optional NoncePattern nonce = 4;
+}
+
+message TCPFragment {
+
+    // Enable additional TCP fragmentation.
+    optional bool enable = 1;
+
+    // Max sleep time in milliseconds between sending two fragments.
+    // This value can't exceed 100.
+    // If not set, a reasonable default value is used.
+    optional int32 maxSleepMs = 2;
+}
+
+message NoncePattern {
+
+    // Strategy to manipulate nonce.
+    optional NonceType type = 1;
+
+    // If the pattern applies to each UDP packet,
+    // or only applies to the first UDP packet.
+    optional bool applyToAllUDPPacket = 2;
+
+    // Minimum number of bytes to manipulate.
+    // It is ignored when NonceType is NONCE_TYPE_RANDOM or NONCE_TYPE_FIXED.
+    optional int32 minLen = 3;
+
+    // Maximum number of bytes to manipulate.
+    // This value can't exceed 12.
+    // It is ignored when NonceType is NONCE_TYPE_RANDOM or NONCE_TYPE_FIXED.
+    optional int32 maxLen = 4;
+
+    // A list of hex string (without 0x) that represent customized
+    // nonce prefix to use. For example, string "00010203"
+    // represent a 4 bytes nonce prefix [0, 1, 2, 3].
+    //
+    // Each nonce prefix can't exceed 12 bytes.
+    //
+    // When multiple strings are provided, a random one is used each time.
+    //
+    // It has no effect when NonceType is not NONCE_TYPE_FIXED.
+    repeated string customHexStrings = 5;
+}
+
+enum NonceType {
+
+    // Do not make change to the original random nonce.
+    NONCE_TYPE_RANDOM = 0;
+
+    // Use printable ASCII characters from 0x20 to 0x7E.
+    NONCE_TYPE_PRINTABLE = 1;
+
+    // Use a pre-defined subset of printable ASCII characters.
+    NONCE_TYPE_PRINTABLE_SUBSET = 2;
+
+    // Use a customized nonce prefix.
+    // If field customHexStrings is not set in NoncePattern,
+    // the behavior is the same as NONCE_TYPE_RANDOM.
+    NONCE_TYPE_FIXED = 3;
+}

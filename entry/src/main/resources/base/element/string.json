@@ -1,0 +1,36 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "name": "vpn_extension_label",
+      "value": "Mihomo POC VPN"
+    },
+    {
+      "name": "vpn_extension_desc",
+      "value": "VPN TUN capability proof of concept"
+    },
+    {
+      "name": "background_running_reason",
+      "value": "Required to keep VPN traffic processing active in the background"
+    },
+    {
+      "name": "internet_reason",
+      "value": "Required for later VPN traffic validation"
+    },
+    {
+      "name": "network_info_reason",
+      "value": "Required to observe network state during VPN validation"
+    }
+  ]
+}

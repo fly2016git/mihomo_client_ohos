@@ -1,0 +1,56 @@
+name: 'mihomo test'
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: 'mihomo repository (e.g. MetaCubeX/mihomo)'
+        required: true
+        default: 'MetaCubeX/mihomo'
+      branch:
+        description: 'Branch to checkout'
+        required: true
+        default: 'Alpha'
+jobs:
+  mihomo-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out mieru repository code
+        uses: actions/checkout@v6
+        with:
+          path: mieru
+      - name: Check out mihomo repository code
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.branch }}
+          path: mihomo
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: mihomo/go.mod
+      - name: Update mieru reference
+        working-directory: mihomo
+        run: echo "replace github.com/enfein/mieru/v3 => ../mieru" >> go.mod
+      - name: Run go mod tidy
+        working-directory: mihomo
+        run: go mod tidy
+      - name: Show go mod diff
+        working-directory: mihomo
+        run: git --no-pager diff
+      - name: Run mihomo unit test
+        working-directory: mihomo
+        run: make vet
+      - name: Build mihomo
+        working-directory: mihomo
+        run: make linux-amd64-v1
+      - name: Build mieru test binaries
+        working-directory: mieru
+        run: make test-binary
+      - name: Copy mihomo binary
+        run: cp mihomo/bin/mihomo-linux-amd64-v1 mieru/bin/mihomo
+      - name: Build mieru test docker image
+        working-directory: mieru
+        run: docker build -t mihomo:latest -f test/deploy/mihomo/Dockerfile .
+      - name: Run mieru test
+        run: docker run mihomo:latest
