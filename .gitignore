@@ -1,0 +1,17 @@
+/node_modules
+/oh_modules
+/local.properties
+/.DS_Store
+/core/mihomo-python/
+/core/mihomo/
+/design/
+/.idea
+**/build
+/.hvigor
+/.cache
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer

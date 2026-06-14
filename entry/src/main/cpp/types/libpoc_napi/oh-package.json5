@@ -1,0 +1,6 @@
+{
+  "name": "@types/libpoc_napi.so",
+  "types": "./index.d.ts",
+  "version": "",
+  "description": "POC-02 NAPI type declarations."
+}
