@@ -2,6 +2,8 @@ import { Want, common, wantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { vpnExtension } from '@kit.NetworkKit';
 import { ConfigService } from '../config/ConfigService';
+import { SettingsService } from '../settings/SettingsService';
+import { SubscriptionService } from '../subscription/SubscriptionService';
 import { RuntimeStore } from './RuntimeStore';
 
 const BUNDLE_NAME = 'com.example.mihomopoc';
@@ -10,17 +12,34 @@ const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 export class VpnControlService {
   private configService: ConfigService;
   private runtimeStore: RuntimeStore;
+  private settingsService: SettingsService;
+  private subscriptionService: SubscriptionService;
   private uiContext?: common.UIAbilityContext;
   private backgroundRunning: boolean = false;
 
   constructor(filesDir: string, uiContext?: common.UIAbilityContext) {
     this.configService = new ConfigService(filesDir);
     this.runtimeStore = new RuntimeStore(filesDir);
+    this.settingsService = new SettingsService(filesDir);
+    this.subscriptionService = new SubscriptionService(filesDir);
     this.uiContext = uiContext;
   }
 
   async connect(profileId: string): Promise<void> {
-    const profile = this.configService.getProfile(profileId) ?? this.configService.ensureDefaultProfile();
+    const settings = this.settingsService.load();
+    let profile = this.configService.getProfile(profileId) ?? this.configService.ensureDefaultProfile();
+    if (settings.autoRefreshSubscriptionOnConnect && profile.type === 'subscription') {
+      this.runtimeStore.appendEvent('Auto refresh subscription before connect profile=' + profile.name);
+      const refreshResult = await this.subscriptionService.update(profile.id);
+      if (refreshResult.ok) {
+        this.runtimeStore.appendEvent('Auto refresh subscription ok bytes=' + refreshResult.bytes.toString());
+        profile = this.configService.getProfile(profile.id) ?? profile;
+      } else {
+        this.runtimeStore.appendEvent('Auto refresh subscription failed, using cached runtime: ' + refreshResult.error);
+      }
+    }
+    const rawYaml = this.configService.loadRawYaml(profile.id);
+    this.configService.writeTextFile(profile.runtimePath, this.configService.generateRuntimeYaml(rawYaml, settings));
     this.runtimeStore.update({
       runtimeState: 'starting',
       coreState: 'loading',
@@ -38,7 +57,17 @@ export class VpnControlService {
         command: 'connect',
         profileId: profile.id,
         requestedAt: new Date().toISOString(),
-        requestedBy: 'ui'
+        requestedBy: 'ui',
+        vpnRouteMode: settings.routeMode,
+        vpnDnsAddress: settings.vpnDnsAddress,
+        vpnRouteInterface: 'vpn-tun',
+        vpnRouteDefaultFlag: true,
+        tunReadinessProbeMs: 0,
+        ipv6Enabled: settings.ipv6Enabled,
+        udpEnabled: settings.udpEnabled,
+        proxyMode: settings.proxyMode,
+        dnsMode: settings.dnsMode,
+        logLevel: settings.logLevel
       }
     };
     await vpnExtension.startVpnExtensionAbility(want);

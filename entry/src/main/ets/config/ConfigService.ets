@@ -1,9 +1,14 @@
 import fs from '@ohos.file.fs';
 import {
+  AppSettings,
   ConfigValidationResult,
+  DEFAULT_APP_SETTINGS,
   DEFAULT_PROFILE_ID,
+  DnsMode,
+  LogLevel,
   MihomoLayout,
   Profile,
+  ProxyMode,
   ProxyNode,
   ProfilesState,
   SubscriptionMeta
@@ -72,7 +77,8 @@ export class ConfigService {
       logsDir: baseDir + '/logs',
       stateDir: baseDir + '/state',
       profilesPath: baseDir + '/state/profiles.json',
-      runtimePath: baseDir + '/state/runtime.json'
+      runtimePath: baseDir + '/state/runtime.json',
+      settingsPath: baseDir + '/state/settings.json'
     };
 
     this.ensureDir(layout.baseDir);
@@ -188,11 +194,19 @@ export class ConfigService {
     };
   }
 
-  generateRuntimeYaml(rawYaml: string): string {
-    const mode = this.extractTopLevelScalar(rawYaml, 'mode', 'direct');
-    const safeMode = mode === 'rule' || mode === 'global' || mode === 'direct' ? mode : 'direct';
+  generateRuntimeYaml(rawYaml: string, settings?: AppSettings): string {
+    const resolvedSettings = settings ?? this.loadStoredSettings();
+    const rawMode = this.extractTopLevelScalar(rawYaml, 'mode', resolvedSettings.proxyMode);
+    const safeMode = this.safeProxyMode(resolvedSettings.proxyMode || rawMode);
+    const logLevel = this.safeLogLevel(resolvedSettings.logLevel);
+    const dnsMode = this.toRuntimeDnsMode(resolvedSettings.dnsMode);
+    const ipv6 = resolvedSettings.ipv6Enabled ? 'true' : 'false';
     return DEFAULT_RUNTIME_CONFIG
       .replace('mode: direct\n', 'mode: ' + safeMode + '\n')
+      .replace('log-level: info\n', 'log-level: ' + logLevel + '\n')
+      .replace('ipv6: false\n', 'ipv6: ' + ipv6 + '\n')
+      .replace('  enhanced-mode: fake-ip\n', '  enhanced-mode: ' + dnsMode + '\n')
+      .replace('  ipv6: false\n', '  ipv6: ' + ipv6 + '\n')
       .replace(
         'proxies: []\n' +
           'proxy-groups: []\n' +
@@ -518,6 +532,53 @@ export class ConfigService {
       }
     }
     return fallback;
+  }
+
+  private safeProxyMode(mode: string): ProxyMode {
+    if (mode === 'rule' || mode === 'global' || mode === 'direct') {
+      return mode;
+    }
+    return DEFAULT_APP_SETTINGS.proxyMode;
+  }
+
+  private safeLogLevel(level: string): LogLevel {
+    if (level === 'debug' || level === 'info' || level === 'warning' || level === 'error') {
+      return level;
+    }
+    return DEFAULT_APP_SETTINGS.logLevel;
+  }
+
+  private loadStoredSettings(): AppSettings {
+    const layout = this.ensureLayout();
+    if (!this.pathExists(layout.settingsPath)) {
+      return DEFAULT_APP_SETTINGS;
+    }
+    try {
+      const parsed = JSON.parse(fs.readTextSync(layout.settingsPath)) as Partial<AppSettings>;
+      return {
+        routeMode: DEFAULT_APP_SETTINGS.routeMode,
+        proxyMode: this.safeProxyMode(parsed.proxyMode ?? DEFAULT_APP_SETTINGS.proxyMode),
+        dnsMode: parsed.dnsMode === 'default' || parsed.dnsMode === 'fake-ip' || parsed.dnsMode === 'redir-host' ?
+          parsed.dnsMode : DEFAULT_APP_SETTINGS.dnsMode,
+        vpnDnsAddress: parsed.vpnDnsAddress && parsed.vpnDnsAddress.length > 0 ? parsed.vpnDnsAddress :
+          DEFAULT_APP_SETTINGS.vpnDnsAddress,
+        ipv6Enabled: typeof parsed.ipv6Enabled === 'boolean' ? parsed.ipv6Enabled : DEFAULT_APP_SETTINGS.ipv6Enabled,
+        udpEnabled: typeof parsed.udpEnabled === 'boolean' ? parsed.udpEnabled : DEFAULT_APP_SETTINGS.udpEnabled,
+        autoRefreshSubscriptionOnConnect: typeof parsed.autoRefreshSubscriptionOnConnect === 'boolean' ?
+          parsed.autoRefreshSubscriptionOnConnect : DEFAULT_APP_SETTINGS.autoRefreshSubscriptionOnConnect,
+        autoStart: typeof parsed.autoStart === 'boolean' ? parsed.autoStart : DEFAULT_APP_SETTINGS.autoStart,
+        logLevel: this.safeLogLevel(parsed.logLevel ?? DEFAULT_APP_SETTINGS.logLevel)
+      };
+    } catch (_) {
+      return DEFAULT_APP_SETTINGS;
+    }
+  }
+
+  private toRuntimeDnsMode(mode: DnsMode): string {
+    if (mode === 'redir-host') {
+      return 'redir-host';
+    }
+    return 'fake-ip';
   }
 
   private buildRuntimeTrafficBlocks(rawYaml: string): string {

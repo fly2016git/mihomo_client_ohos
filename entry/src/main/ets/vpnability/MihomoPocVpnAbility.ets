@@ -5,6 +5,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConfigService } from '../config/ConfigService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { Profile } from '../models/MvpTypes';
+import { SettingsService } from '../settings/SettingsService';
 import pocNative, { PocStatus } from '../native/PocNative';
 
 const DOMAIN = 0x0001;
@@ -125,6 +126,8 @@ interface ProductVpnOptions {
   tunReadinessProbeMs: number;
   routeInterface: string;
   routeDefaultFlag: boolean;
+  ipv6Enabled: boolean;
+  udpEnabled: boolean;
 }
 
 interface TunSnapshot {
@@ -403,7 +406,8 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     if (!validation.ok) {
       throw new Error('CONFIG_UNSUPPORTED_FIELD: ' + validation.errors.join('; '));
     }
-    configService.writeTextFile(profile.runtimePath, configService.generateRuntimeYaml(rawYaml));
+    const settings = new SettingsService(this.context.filesDir).load();
+    configService.writeTextFile(profile.runtimePath, configService.generateRuntimeYaml(rawYaml, settings));
   }
 
   private async registerProductProtect(store: RuntimeStore): Promise<void> {
@@ -697,7 +701,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       dnsAddresses: [dnsAddress],
       mtu: 1500,
       isIPv4Accepted: true,
-      isIPv6Accepted: false,
+      isIPv6Accepted: options?.ipv6Enabled ?? false,
       isBlocking: isBlocking,
       blockedApplications: ['com.example.mihomopoc']
     };
@@ -1625,7 +1629,9 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       dnsAddress: this.getStringParam(params, 'vpnDnsAddress', '10.7.0.3'),
       tunReadinessProbeMs: this.getNumberParam(params, 'tunReadinessProbeMs', 0),
       routeInterface: routeInterfaceParam === 'none' ? '' : routeInterfaceParam,
-      routeDefaultFlag: this.getBooleanParam(params, 'vpnRouteDefaultFlag', true)
+      routeDefaultFlag: this.getBooleanParam(params, 'vpnRouteDefaultFlag', true),
+      ipv6Enabled: this.getBooleanParam(params, 'ipv6Enabled', false),
+      udpEnabled: this.getBooleanParam(params, 'udpEnabled', true)
     };
   }
 

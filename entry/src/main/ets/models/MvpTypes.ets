@@ -1,6 +1,11 @@
 export type ProfileType = 'local' | 'subscription';
 export type RuntimeState = 'idle' | 'starting' | 'connected' | 'stopping' | 'error' | 'unknown';
 export type CoreState = 'stopped' | 'loading' | 'running' | 'stopping' | 'error' | 'unknown';
+export type VpnRouteMode = 'default' | 'split-default' | 'blocking-empty' | 'blocking-split' | 'blocking-default' |
+  'no-routes' | 'exclude-local';
+export type ProxyMode = 'rule' | 'global' | 'direct';
+export type DnsMode = 'default' | 'fake-ip' | 'redir-host';
+export type LogLevel = 'debug' | 'info' | 'warning' | 'error';
 
 export interface MihomoLayout {
   baseDir: string;
@@ -13,6 +18,7 @@ export interface MihomoLayout {
   stateDir: string;
   profilesPath: string;
   runtimePath: string;
+  settingsPath: string;
 }
 
 export interface Profile {
@@ -68,6 +74,30 @@ export interface ProfilesState {
 }
 
 export const DEFAULT_PROFILE_ID = 'default';
+
+export interface AppSettings {
+  routeMode: VpnRouteMode;
+  proxyMode: ProxyMode;
+  dnsMode: DnsMode;
+  vpnDnsAddress: string;
+  ipv6Enabled: boolean;
+  udpEnabled: boolean;
+  autoRefreshSubscriptionOnConnect: boolean;
+  autoStart: boolean;
+  logLevel: LogLevel;
+}
+
+export const DEFAULT_APP_SETTINGS: AppSettings = {
+  routeMode: 'blocking-default',
+  proxyMode: 'rule',
+  dnsMode: 'default',
+  vpnDnsAddress: '10.7.0.3',
+  ipv6Enabled: false,
+  udpEnabled: true,
+  autoRefreshSubscriptionOnConnect: false,
+  autoStart: false,
+  logLevel: 'info'
+};
 
 export interface SubscriptionMeta {
   url: string;

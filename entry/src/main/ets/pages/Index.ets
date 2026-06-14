@@ -1,8 +1,19 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConfigService } from '../config/ConfigService';
-import { Profile, ProxyNode, RuntimeSnapshot } from '../models/MvpTypes';
+import {
+  AppSettings,
+  DEFAULT_APP_SETTINGS,
+  DnsMode,
+  LogLevel,
+  Profile,
+  ProxyMode,
+  ProxyNode,
+  RuntimeSnapshot,
+  VpnRouteMode
+} from '../models/MvpTypes';
 import { RuntimeStore } from '../runtime/RuntimeStore';
+import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { VpnControlService } from '../runtime/VpnControlService';
 
@@ -35,11 +46,13 @@ struct Index {
   @State newProfileName: string = '新配置';
   @State editProfileId: string = '';
   @State rootWidth: number = 390;
+  @State appSettings: AppSettings = DEFAULT_APP_SETTINGS;
 
   private configService?: ConfigService;
   private runtimeStore?: RuntimeStore;
   private vpnControlService?: VpnControlService;
   private subscriptionService?: SubscriptionService;
+  private settingsService?: SettingsService;
   private pollTimer: number = -1;
 
   aboutToAppear(): void {
@@ -49,9 +62,11 @@ struct Index {
     this.runtimeStore = new RuntimeStore(filesDir);
     this.vpnControlService = new VpnControlService(filesDir, context);
     this.subscriptionService = new SubscriptionService(filesDir);
+    this.settingsService = new SettingsService(filesDir);
     const profile = this.configService.ensureDefaultProfile();
     this.activeProfileId = profile.id;
     this.rawYaml = this.configService.loadRawYaml(profile.id);
+    this.loadSettings();
     this.reloadProfiles();
     this.markRestoredRuntimeUnknown();
     this.refreshState();
@@ -76,6 +91,42 @@ struct Index {
     this.activeProfileId = active.id;
     this.activeProfileName = active.name;
     this.nodes = this.configService.listProxyNodes(active.id);
+  }
+
+  private loadSettings(): void {
+    if (!this.settingsService) {
+      return;
+    }
+    this.appSettings = this.settingsService.load();
+  }
+
+  private updateSettings(patch: Partial<AppSettings>): void {
+    if (!this.settingsService) {
+      return;
+    }
+    this.appSettings = this.settingsService.update(patch);
+    this.validationText = '设置已保存';
+    this.rebuildActiveRuntimeYaml();
+    if (this.runtimeStore) {
+      this.runtimeStore.appendEvent('Settings updated: route=' + this.appSettings.routeMode +
+        ' mode=' + this.appSettings.proxyMode + ' dns=' + this.appSettings.dnsMode);
+    }
+    this.refreshState();
+  }
+
+  private rebuildActiveRuntimeYaml(): void {
+    if (!this.configService) {
+      return;
+    }
+    const profile = this.configService.getActiveProfile();
+    const rawYaml = this.configService.loadRawYaml(profile.id);
+    const validation = this.configService.validateRawYaml(rawYaml);
+    if (!validation.ok) {
+      this.validationText = validation.errors.join('; ');
+      return;
+    }
+    this.configService.writeTextFile(profile.runtimePath,
+      this.configService.generateRuntimeYaml(rawYaml, this.appSettings));
   }
 
   private refreshState(): void {
@@ -610,6 +661,113 @@ struct Index {
     return node.type.toUpperCase() + ' · ' + (node.delay > 0 ? node.delay.toString() + ' ms' : '--');
   }
 
+  private cycleRouteMode(): void {
+    const modes: VpnRouteMode[] = ['blocking-default', 'split-default', 'default', 'no-routes', 'exclude-local',
+      'blocking-split', 'blocking-empty'];
+    const index = modes.indexOf(this.appSettings.routeMode);
+    this.updateSettings({ routeMode: modes[(index + 1) % modes.length] });
+  }
+
+  private cycleProxyMode(): void {
+    const modes: ProxyMode[] = ['rule', 'global', 'direct'];
+    const index = modes.indexOf(this.appSettings.proxyMode);
+    this.updateSettings({ proxyMode: modes[(index + 1) % modes.length] });
+  }
+
+  private cycleDnsMode(): void {
+    const modes: DnsMode[] = ['default', 'fake-ip', 'redir-host'];
+    const index = modes.indexOf(this.appSettings.dnsMode);
+    this.updateSettings({ dnsMode: modes[(index + 1) % modes.length] });
+  }
+
+  private cycleLogLevel(): void {
+    const levels: LogLevel[] = ['info', 'debug', 'warning', 'error'];
+    const index = levels.indexOf(this.appSettings.logLevel);
+    this.updateSettings({ logLevel: levels[(index + 1) % levels.length] });
+  }
+
+  private routeModeLabel(mode: VpnRouteMode): string {
+    if (mode === 'blocking-default') {
+      return 'Blocking Default';
+    }
+    if (mode === 'split-default') {
+      return 'Split Default';
+    }
+    if (mode === 'default') {
+      return 'Default Route';
+    }
+    if (mode === 'no-routes') {
+      return 'No Routes';
+    }
+    if (mode === 'exclude-local') {
+      return 'Exclude Local';
+    }
+    if (mode === 'blocking-split') {
+      return 'Blocking Split';
+    }
+    return 'Blocking Empty';
+  }
+
+  private proxyModeLabel(mode: ProxyMode): string {
+    if (mode === 'global') {
+      return '全局';
+    }
+    if (mode === 'direct') {
+      return '直连';
+    }
+    return '规则';
+  }
+
+  private dnsModeLabel(mode: DnsMode): string {
+    if (mode === 'redir-host') {
+      return 'redir-host';
+    }
+    if (mode === 'fake-ip') {
+      return 'fake-ip';
+    }
+    return '默认';
+  }
+
+  private onOffLabel(value: boolean): string {
+    return value ? '开启' : '关闭';
+  }
+
+  private settingFlagValue(key: string): boolean {
+    if (key === 'ipv6') {
+      return this.appSettings.ipv6Enabled;
+    }
+    if (key === 'udp') {
+      return this.appSettings.udpEnabled;
+    }
+    if (key === 'autoRefresh') {
+      return this.appSettings.autoRefreshSubscriptionOnConnect;
+    }
+    if (key === 'autoStart') {
+      return this.appSettings.autoStart;
+    }
+    return false;
+  }
+
+  private toggleSettingFlag(key: string): void {
+    if (key === 'ipv6') {
+      this.updateSettings({ ipv6Enabled: !this.appSettings.ipv6Enabled });
+      return;
+    }
+    if (key === 'udp') {
+      this.updateSettings({ udpEnabled: !this.appSettings.udpEnabled });
+      return;
+    }
+    if (key === 'autoRefresh') {
+      this.updateSettings({
+        autoRefreshSubscriptionOnConnect: !this.appSettings.autoRefreshSubscriptionOnConnect
+      });
+      return;
+    }
+    if (key === 'autoStart') {
+      this.updateSettings({ autoStart: !this.appSettings.autoStart });
+    }
+  }
+
   @Builder AppHeader() {
     Row({ space: 12 }) {
       Column() {
@@ -782,7 +940,19 @@ struct Index {
       .backgroundColor(this.elevatedBg())
       .borderRadius(15)
 
-      this.StatusPill('Rule', this.accentColor())
+      Row({ space: 6 }) {
+        Text('●')
+          .fontSize(8)
+          .fontColor(this.accentColor())
+        Text(this.proxyModeLabel(this.appSettings.proxyMode))
+          .fontSize(11)
+          .fontColor(this.secondaryText())
+          .maxLines(1)
+      }
+      .height(30)
+      .padding({ left: 10, right: 10 })
+      .backgroundColor(this.elevatedBg())
+      .borderRadius(15)
     }
     .width('100%')
     .justifyContent(FlexAlign.Center)
@@ -964,12 +1134,16 @@ struct Index {
 
   @Builder RouteModeSection() {
     Column({ space: 8 }) {
-      this.SectionTitle('路由模式', 'M2-2 接入持久化')
+      this.SectionTitle('路由模式', '点击切换')
       Row() {
-        Text('blocking-default')
+        Text(this.routeModeLabel(this.appSettings.routeMode))
           .fontSize(13)
           .fontColor(this.primaryText())
           .layoutWeight(1)
+        Text(this.appSettings.routeMode)
+          .fontSize(11)
+          .fontColor(this.mutedText())
+          .margin({ right: 10 })
         Text('>')
           .fontSize(14)
           .fontColor(this.mutedText())
@@ -978,6 +1152,9 @@ struct Index {
       .padding({ left: 12, right: 12 })
       .backgroundColor(this.inputBg())
       .borderRadius(10)
+      .onClick(() => {
+        this.cycleRouteMode();
+      })
     }
     .width('100%')
   }
@@ -1542,14 +1719,18 @@ struct Index {
     Scroll() {
       Column({ space: 14 }) {
         this.SettingsGroup('代理模式')
-        this.SettingsRow('启动模式', '规则 / 全局 / 直连', '规则')
-        this.SettingsRow('DNS 模式', 'fake-ip / redir-host 后续接入', '默认')
+        this.ProxyModeSettingRow()
+        this.RouteModeSettingRow()
+        this.DnsModeSettingRow()
+        this.LogLevelSettingRow()
         this.SettingsGroup('网络')
-        this.SettingsRow('IPv6', 'M2-2 接入 runtime YAML', '关闭')
-        this.SettingsRow('UDP 转发', '沿用 mihomo 配置能力', '开启')
-        this.SettingsRow('连接后自动更新订阅', 'M2-2 接入', '关闭')
+        this.ToggleSettingRow('IPv6', '写入 runtime YAML，并传入 VPN 配置', 'ipv6')
+        this.ToggleSettingRow('UDP 转发', '保存到连接设置，用于后续 native UDP 策略', 'udp')
+        this.ToggleSettingRow('连接前自动更新订阅', '失败时沿用上一次可用 runtime', 'autoRefresh')
+        this.ToggleSettingRow('开机自启', '设置已持久化，系统自启能力后续接入', 'autoStart')
         this.SettingsGroup('诊断')
         this.SettingsRow('Runtime', this.statusText + ' / Core: ' + this.coreText, '查看')
+        this.SettingsRow('VPN DNS', '传给 VPN Extension 的 DNS 地址', this.appSettings.vpnDnsAddress)
         this.SettingsRow('FlowGuard', 'v0.1 · MVP-01', '关于')
       }
       .width('100%')
@@ -1571,21 +1752,122 @@ struct Index {
       .padding({ top: 6 })
   }
 
-  @Builder SettingsRow(title: string, subtitle: string, value: string) {
+  @Builder ProxyModeSettingRow() {
     Row({ space: 12 }) {
-      Column({ space: 4 }) {
-        Text(title)
-          .fontSize(14)
-          .fontColor(this.primaryText())
+      this.SettingsRowText('启动模式', '规则 / 全局 / 直连会写入 runtime YAML')
+      Text(this.proxyModeLabel(this.appSettings.proxyMode))
+        .fontSize(12)
+        .fontColor(this.accentColor())
+        .maxLines(1)
+    }
+    .height(62)
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
+    .onClick(() => {
+      this.cycleProxyMode();
+    })
+  }
+
+  @Builder RouteModeSettingRow() {
+    Row({ space: 12 }) {
+      this.SettingsRowText('VPN 路由', '决定 VPN Extension 下发 default/split/blocking 路由')
+      Column({ space: 2 }) {
+        Text(this.routeModeLabel(this.appSettings.routeMode))
+          .fontSize(12)
+          .fontColor(this.accentColor())
           .maxLines(1)
-        Text(subtitle)
-          .fontSize(11)
+        Text(this.appSettings.routeMode)
+          .fontSize(10)
           .fontColor(this.mutedText())
           .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
       }
-      .alignItems(HorizontalAlign.Start)
-      .layoutWeight(1)
+      .alignItems(HorizontalAlign.End)
+    }
+    .height(62)
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
+    .onClick(() => {
+      this.cycleRouteMode();
+    })
+  }
+
+  @Builder DnsModeSettingRow() {
+    Row({ space: 12 }) {
+      this.SettingsRowText('DNS 模式', 'default/fake-ip/redir-host 会写入 runtime YAML')
+      Text(this.dnsModeLabel(this.appSettings.dnsMode))
+        .fontSize(12)
+        .fontColor(this.accentColor())
+        .maxLines(1)
+    }
+    .height(62)
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
+    .onClick(() => {
+      this.cycleDnsMode();
+    })
+  }
+
+  @Builder LogLevelSettingRow() {
+    Row({ space: 12 }) {
+      this.SettingsRowText('日志级别', '写入 runtime YAML log-level')
+      Text(this.appSettings.logLevel)
+        .fontSize(12)
+        .fontColor(this.accentColor())
+        .maxLines(1)
+    }
+    .height(62)
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
+    .onClick(() => {
+      this.cycleLogLevel();
+    })
+  }
+
+  @Builder ToggleSettingRow(title: string, subtitle: string, key: string) {
+    Row({ space: 12 }) {
+      this.SettingsRowText(title, subtitle)
+      Text(this.onOffLabel(this.settingFlagValue(key)))
+        .fontSize(12)
+        .fontColor(this.settingFlagValue(key) ? this.accentColor() : this.secondaryText())
+        .maxLines(1)
+    }
+    .height(62)
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
+    .onClick(() => {
+      this.toggleSettingFlag(key);
+    })
+  }
+
+  @Builder SettingsRowText(title: string, subtitle: string) {
+    Column({ space: 4 }) {
+      Text(title)
+        .fontSize(14)
+        .fontColor(this.primaryText())
+        .maxLines(1)
+      Text(subtitle)
+        .fontSize(11)
+        .fontColor(this.mutedText())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .alignItems(HorizontalAlign.Start)
+    .layoutWeight(1)
+  }
+
+  @Builder SettingsRow(title: string, subtitle: string, value: string) {
+    Row({ space: 12 }) {
+      this.SettingsRowText(title, subtitle)
       Text(value)
         .fontSize(12)
         .fontColor(this.secondaryText())

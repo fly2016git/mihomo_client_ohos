@@ -207,6 +207,27 @@
 
 目标：让新原型里的 route mode、启动模式、DNS、IPv6、UDP 等设置成为真实可保存、可传递、可诊断的参数。
 
+状态：已完成（2026-06-14）。
+
+完成情况：
+
+- 新增 `AppSettings` 数据模型和 `SettingsService`，设置持久化到 `mihomo/state/settings.json`。
+- 设置项覆盖：VPN 路由模式、代理启动模式、DNS 模式、VPN DNS 地址、IPv6、UDP、连接前自动刷新订阅、开机自启、日志级别。
+- `ConfigService.generateRuntimeYaml()` 已接入 settings，生成 runtime YAML 时写入 `mode`、`log-level`、`ipv6`、`dns.enhanced-mode`、`dns.ipv6`。
+- `SubscriptionService.update()` 刷新订阅后会使用当前 settings 生成 runtime YAML，避免刷新订阅覆盖用户运行参数。
+- `VpnControlService.connect()` 会读取 settings，按开关在连接前自动刷新订阅；刷新失败时沿用旧 runtime 并写入运行事件，不阻断连接。
+- `VpnControlService.connect()` 已向 `MihomoPocVpnAbility` 传递 `vpnRouteMode`、`vpnDnsAddress`、IPv6、UDP、proxy mode、DNS mode、log level 等参数。
+- `MihomoPocVpnAbility` 已用 settings 生成产品 runtime YAML，并将 IPv6 设置传入 VPN 配置。
+- 首页 Mode pill、路由模式卡片和设置页都读取真实 settings；设置页支持点击切换/开关，并立即重建当前 active profile runtime YAML。
+- 真机测试地址 `192.168.3.65:37805` 已完成安装、设置页切换、首页同步、连接参数日志验证、连接/断开恢复。
+- 真机验证日志确认：设置 VPN 路由为 `split-default` 后，VPN Ability 收到 `routeMode=split-default`、`dns=10.7.0.3`，并创建 split route。
+
+遗留到后续里程碑：
+
+- `autoStart` 已持久化，系统级开机自启注册能力尚未接入。
+- `udpEnabled` 已持久化并传入连接参数，native/core 侧更细的 UDP 策略控制留到后续网络能力阶段。
+- 设置项目前采用点击循环选择，后续可替换为更完整的 picker/select 控件。
+
 范围：
 
 - 新增 `SettingsService` 或在现有 config/state 层增加 `AppSettings`：

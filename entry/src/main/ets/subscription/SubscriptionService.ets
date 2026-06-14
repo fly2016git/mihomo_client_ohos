@@ -3,6 +3,7 @@ import fs from '@ohos.file.fs';
 import { util } from '@kit.ArkTS';
 import { ConfigService } from '../config/ConfigService';
 import { Profile, SubscriptionMeta, SubscriptionUpdateResult, makeSubscriptionMeta } from '../models/MvpTypes';
+import { SettingsService } from '../settings/SettingsService';
 
 const MAX_REDIRECTS = 5;
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MiB
@@ -11,9 +12,11 @@ const DEFAULT_USER_AGENT = 'ClashX Pro/1.118.0';
 
 export class SubscriptionService {
   private configService: ConfigService;
+  private settingsService: SettingsService;
 
   constructor(filesDir: string) {
     this.configService = new ConfigService(filesDir);
+    this.settingsService = new SettingsService(filesDir);
   }
 
   validateUrl(url: string): string | null {
@@ -159,7 +162,7 @@ export class SubscriptionService {
       }
 
       // Generate runtime YAML
-      const runtimeYaml = this.configService.generateRuntimeYaml(responseBody);
+      const runtimeYaml = this.configService.generateRuntimeYaml(responseBody, this.settingsService.load());
       const runtimeTmp = profile.runtimePath + '.tmp';
 
       // Write runtime tmp
