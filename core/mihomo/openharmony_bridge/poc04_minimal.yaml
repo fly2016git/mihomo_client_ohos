@@ -1,0 +1,21 @@
+mixed-port: 0
+port: 0
+socks-port: 0
+redir-port: 0
+tproxy-port: 0
+allow-lan: false
+mode: direct
+log-level: info
+ipv6: false
+find-process-mode: off
+profile:
+  store-selected: false
+  store-fake-ip: false
+dns:
+  enable: false
+tun:
+  enable: false
+proxies: []
+proxy-groups: []
+rules:
+  - MATCH,DIRECT
