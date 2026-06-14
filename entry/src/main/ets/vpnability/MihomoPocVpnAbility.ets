@@ -378,6 +378,13 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         lastEvent: 'Core loaded'
       });
       store.appendEvent('Core loaded');
+      try {
+        const versionStatus = await pocNative.getMihomoVersion();
+        store.appendEvent('Mihomo version: ' + (versionStatus.ok ? versionStatus.message :
+          'unavailable code=' + versionStatus.code.toString()), versionStatus.ok ? 'info' : 'warn', 'core');
+      } catch (err) {
+        store.appendEvent('Mihomo version unavailable: ' + this.toErrorText(err), 'warn', 'core');
+      }
 
       const startStatus = await pocNative.startMihomoConfigFileWithTunFd(
         profile.homeDir, profile.runtimePath, this.tunFd);

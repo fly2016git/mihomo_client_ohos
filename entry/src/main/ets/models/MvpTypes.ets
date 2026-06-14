@@ -6,6 +6,8 @@ export type VpnRouteMode = 'default' | 'split-default' | 'blocking-empty' | 'blo
 export type ProxyMode = 'rule' | 'global' | 'direct';
 export type DnsMode = 'default' | 'fake-ip' | 'redir-host';
 export type LogLevel = 'debug' | 'info' | 'warning' | 'error';
+export type RuntimeEventLevel = 'debug' | 'info' | 'warn' | 'error';
+export type RuntimeEventSource = 'ui' | 'vpn' | 'core' | 'subscription' | 'config' | 'diagnostic';
 
 export interface MihomoLayout {
   baseDir: string;
@@ -104,6 +106,13 @@ export interface RuntimeSnapshot {
   lastEvent: string;
   uploadSpeed: number;
   downloadSpeed: number;
+}
+
+export interface RuntimeEvent {
+  timestamp: number;
+  level: RuntimeEventLevel;
+  source: RuntimeEventSource;
+  message: string;
 }
 
 export interface ProfilesState {

@@ -320,6 +320,26 @@ interface ProxyGroup {
 
 目标：让排障不依赖 IDE 日志，App 内能看到必要运行证据。
 
+状态：已完成（2026-06-14）。
+
+已完成：
+
+- `RuntimeStore` 已兼容迁移到结构化 `RuntimeEvent`，保留旧 `events: string[]` 供既有 UI/脚本读取，同时新增 `runtimeEvents` 用于 level/source/search/filter。
+- 日志页已支持 level 过滤、搜索、实时追踪开关、复制诊断信息到系统剪贴板、导出诊断文件到 `files/mihomo/logs`。
+- 诊断导出内容包含 runtime snapshot、settings、active profile、当前 group/node、POC/smoke 摘要、最近 60 条结构化事件。
+- 诊断页已展示 runtime/core、mihomo 版本、graceful stop 可用性、active profile、当前节点、tunFd、protect hook 状态、设置摘要、最近错误、POC/smoke 摘要和最近导出路径。
+- `MihomoPocVpnAbility` 连接时写入 mihomo 版本事件，诊断页从事件中展示 `mihomo/v1.19.27-poc04` 等版本信息。
+- POC/smoke 摘要读取优先使用 `files/mihomo/logs/poc-smoke-summary.txt`、`smoke-summary.txt`、`poc-regression-summary.txt`，没有摘要文件时显示“未运行”。
+- 旧 runtime 日志迁移会清理历史时间戳并重新推断 level/source，避免 `failed=0`、`lastTunError=""` 被误判为 error。
+
+验证：
+
+- `hvigorw --no-daemon --mode module -p module=entry assembleHap` 通过。
+- `git diff --check` 通过。
+- 已安装到真机 `192.168.3.65:37805` 并启动 `EntryAbility`。
+- 真机连接验证通过：`runtime.json` 显示 `runtimeState=connected`、`coreState=running`、`tunFd=29`、`Mihomo version: mihomo/v1.19.27-poc04`、`Protect hook auto-enabled by Go bridge`。
+- 真机断开验证通过：`runtime.json` 回到 `runtimeState=idle`、`coreState=stopped`，并记录 `Mihomo graceful stop: ok`。
+
 范围：
 
 - 统一事件和日志模型：

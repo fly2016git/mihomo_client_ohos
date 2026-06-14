@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import pasteboard from '@ohos.pasteboard';
 import { ConfigService } from '../config/ConfigService';
 import {
   AppSettings,
@@ -12,6 +13,8 @@ import {
   ProxyLatencyState,
   ProxyMode,
   ProxyNode,
+  RuntimeEvent,
+  RuntimeEventLevel,
   RuntimeSnapshot,
   VpnRouteMode
 } from '../models/MvpTypes';
@@ -33,6 +36,7 @@ struct Index {
   @State lastError: string = '';
   @State rawYaml: string = '';
   @State events: string[] = [];
+  @State runtimeEvents: RuntimeEvent[] = [];
   @State busy: boolean = false;
   @State validationText: string = 'Ready';
   @State subUrl: string = '';
@@ -55,12 +59,18 @@ struct Index {
   @State editProfileId: string = '';
   @State rootWidth: number = 390;
   @State appSettings: AppSettings = DEFAULT_APP_SETTINGS;
+  @State logLevelFilter: string = 'all';
+  @State logSearchText: string = '';
+  @State logFollow: boolean = true;
+  @State diagnosticText: string = '';
+  @State lastDiagnosticPath: string = '';
 
   private configService?: ConfigService;
   private runtimeStore?: RuntimeStore;
   private vpnControlService?: VpnControlService;
   private subscriptionService?: SubscriptionService;
   private settingsService?: SettingsService;
+  private logsScroller: Scroller = new Scroller();
   private pollTimer: number = -1;
 
   aboutToAppear(): void {
@@ -155,7 +165,11 @@ struct Index {
       const snapshot = this.runtimeStore.getSnapshot();
       this.applySnapshot(snapshot);
       this.events = this.runtimeStore.getEvents();
+      this.runtimeEvents = this.runtimeStore.getRuntimeEvents();
       this.reloadProfiles();
+      if (this.selectedSectionIndex === 4 && this.logFollow) {
+        this.logsScroller.scrollEdge(Edge.Top);
+      }
     } catch (err) {
       this.lastError = this.toErrorText(err);
       hilog.error(DOMAIN, TAG, 'refreshState failed: %{public}s', this.lastError);
@@ -850,6 +864,167 @@ struct Index {
 
   private delayTestUrl(): string {
     return 'http://www.gstatic.com/generate_204';
+  }
+
+  private getFilteredRuntimeEvents(): RuntimeEvent[] {
+    const keyword = this.logSearchText.trim().toLowerCase();
+    return this.runtimeEvents.filter((event: RuntimeEvent) => {
+      const levelOk = this.logLevelFilter === 'all' || event.level === this.logLevelFilter;
+      const keywordOk = keyword.length === 0 ||
+        event.message.toLowerCase().indexOf(keyword) >= 0 ||
+        event.source.toLowerCase().indexOf(keyword) >= 0 ||
+        event.level.toLowerCase().indexOf(keyword) >= 0;
+      return levelOk && keywordOk;
+    });
+  }
+
+  private setLogLevelFilter(level: string): void {
+    this.logLevelFilter = level;
+  }
+
+  private updateLogSearch(text: string): void {
+    this.logSearchText = text;
+  }
+
+  private toggleLogFollow(): void {
+    this.logFollow = !this.logFollow;
+  }
+
+  private exportDiagnostics(): void {
+    if (!this.runtimeStore || !this.configService) {
+      return;
+    }
+    try {
+      const profile = this.configService.getActiveProfile();
+      const path = this.runtimeStore.exportDiagnostics(this.appSettings, profile, this.selectedProxyGroupLabel(),
+        this.selectedNodeName(), this.selectedNodeMeta());
+      this.lastDiagnosticPath = path;
+      this.diagnosticText = this.runtimeStore.createDiagnosticsText(this.appSettings, profile,
+        this.selectedProxyGroupLabel(), this.selectedNodeName(), this.selectedNodeMeta());
+      this.validationText = '诊断已导出';
+      this.refreshState();
+    } catch (err) {
+      this.validationText = '诊断导出失败: ' + this.toErrorText(err);
+      if (this.runtimeStore) {
+        this.runtimeStore.appendEvent('Diagnostics export failed: ' + this.toErrorText(err), 'error', 'diagnostic');
+      }
+    }
+  }
+
+  private async copyDiagnosticText(): Promise<void> {
+    if (!this.runtimeStore || !this.configService) {
+      return;
+    }
+    const profile = this.configService.getActiveProfile();
+    this.diagnosticText = this.runtimeStore.createDiagnosticsText(this.appSettings, profile,
+      this.selectedProxyGroupLabel(), this.selectedNodeName(), this.selectedNodeMeta());
+    try {
+      await pasteboard.getSystemPasteboard().setData(
+        pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, this.diagnosticText)
+      );
+      this.validationText = '诊断信息已复制';
+      this.runtimeStore.appendEvent('Diagnostics copied to clipboard', 'info', 'diagnostic');
+    } catch (err) {
+      this.validationText = '复制失败: ' + this.toErrorText(err);
+      this.runtimeStore.appendEvent('Diagnostics copy failed: ' + this.toErrorText(err), 'error', 'diagnostic');
+    }
+  }
+
+  private refreshDiagnosticText(): void {
+    if (!this.runtimeStore || !this.configService) {
+      return;
+    }
+    const profile = this.configService.getActiveProfile();
+    this.diagnosticText = this.runtimeStore.createDiagnosticsText(this.appSettings, profile,
+      this.selectedProxyGroupLabel(), this.selectedNodeName(), this.selectedNodeMeta());
+    this.validationText = '诊断信息已刷新';
+  }
+
+  private eventTimeText(event: RuntimeEvent): string {
+    return new Date(event.timestamp).toLocaleTimeString();
+  }
+
+  private eventToneColor(level: RuntimeEventLevel): string {
+    if (level === 'error') {
+      return '#FF7A7A';
+    }
+    if (level === 'warn') {
+      return '#F0C36A';
+    }
+    if (level === 'debug') {
+      return this.mutedText();
+    }
+    return this.accentColor();
+  }
+
+  private snapshotUpdatedText(): string {
+    if (!this.runtimeStore) {
+      return '--';
+    }
+    return this.formatDate(this.runtimeStore.getSnapshot().updatedAt);
+  }
+
+  private startedAtText(): string {
+    if (!this.runtimeStore) {
+      return '--';
+    }
+    return this.formatDate(this.runtimeStore.getSnapshot().startedAt);
+  }
+
+  private tunFdText(): string {
+    if (!this.runtimeStore) {
+      return '-1';
+    }
+    return this.runtimeStore.getSnapshot().tunFd.toString();
+  }
+
+  private mihomoVersionText(): string {
+    const prefix = 'mihomo version: ';
+    for (const event of this.runtimeEvents) {
+      const lower = event.message.toLowerCase();
+      if (lower.startsWith(prefix)) {
+        return event.message.substring(prefix.length);
+      }
+    }
+    return '未读取';
+  }
+
+  private protectHookText(): string {
+    for (const event of this.runtimeEvents) {
+      const lower = event.message.toLowerCase();
+      if (lower.indexOf('protect failed') >= 0 || lower.indexOf('protect hook') >= 0 &&
+        lower.indexOf('failed') >= 0) {
+        return '异常: ' + event.message;
+      }
+      if (lower.indexOf('protect hook auto-enabled') >= 0 || lower.indexOf('protect callback registered') >= 0) {
+        return 'active';
+      }
+    }
+    return this.statusText === 'Connected' ? '待确认' : '未运行';
+  }
+
+  private gracefulStopText(): string {
+    for (const event of this.runtimeEvents) {
+      const lower = event.message.toLowerCase();
+      if (lower.indexOf('mihomo graceful stop: ok') >= 0) {
+        return '已验证可用';
+      }
+      if (lower.indexOf('mihomo graceful stop') >= 0 &&
+        (lower.indexOf('failed') >= 0 || lower.indexOf('threw') >= 0)) {
+        return '异常: ' + event.message;
+      }
+      if (lower.indexOf('skipping graceful stop') >= 0) {
+        return '跳过: 无 active TUN fd';
+      }
+    }
+    return this.tunFdText() !== '-1' ? '可用，待断开验证' : '未运行';
+  }
+
+  private pocSmokeSummary(): string {
+    if (!this.runtimeStore) {
+      return '未运行';
+    }
+    return this.runtimeStore.getPocSmokeSummary();
   }
 
   private selectProxyNode(node: ProxyNode): void {
@@ -2005,27 +2180,71 @@ struct Index {
   }
 
   @Builder LogsPage() {
-    Scroll() {
+    Scroll(this.logsScroller) {
       Column({ space: 10 }) {
         Row({ space: 8 }) {
-          this.ModeChip('全部', true)
-          this.ModeChip('Info', false)
-          this.ModeChip('Warn', false)
-          this.ModeChip('Error', false)
+          this.LogFilterChip('全部', 'all')
+          this.LogFilterChip('Info', 'info')
+          this.LogFilterChip('Warn', 'warn')
+          this.LogFilterChip('Error', 'error')
         }
         .width('100%')
 
-        ForEach(this.events, (line: string) => {
-          Text(line)
+        TextInput({ text: this.logSearchText, placeholder: '搜索日志' })
+          .height(42)
+          .fontSize(13)
+          .fontColor(this.primaryText())
+          .placeholderColor(this.mutedText())
+          .backgroundColor(this.inputBg())
+          .borderRadius(10)
+          .padding({ left: 12, right: 12 })
+          .onChange((value: string) => {
+            this.updateLogSearch(value);
+          })
+
+        Row({ space: 8 }) {
+          Button(this.logFollow ? '实时追踪: 开' : '实时追踪: 关')
+            .height(34)
             .fontSize(12)
-            .fontColor(this.secondaryText())
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-            .backgroundColor(this.surfaceBg())
+            .fontColor(this.logFollow ? this.accentColor() : this.secondaryText())
+            .backgroundColor(this.elevatedBg())
             .borderRadius(10)
-            .maxLines(3)
+            .onClick(() => {
+              this.toggleLogFollow();
+            })
+          Button('复制诊断')
+            .height(34)
+            .fontSize(12)
+            .fontColor(this.accentColor())
+            .backgroundColor(this.elevatedBg())
+            .borderRadius(10)
+            .onClick(() => {
+              this.copyDiagnosticText();
+            })
+          Button('导出')
+            .height(34)
+            .fontSize(12)
+            .fontColor(this.accentColor())
+            .backgroundColor(this.elevatedBg())
+            .borderRadius(10)
+            .onClick(() => {
+              this.exportDiagnostics();
+            })
+        }
+        .width('100%')
+
+        if (this.lastDiagnosticPath.length > 0) {
+          Text(this.lastDiagnosticPath)
+            .fontSize(11)
+            .fontColor(this.mutedText())
+            .width('100%')
+            .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }, (line: string) => line)
+        }
+
+        ForEach(this.getFilteredRuntimeEvents(), (event: RuntimeEvent) => {
+          this.LogEventRow(event)
+        }, (event: RuntimeEvent) => event.timestamp.toString() + event.message)
       }
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 28 })
@@ -2035,6 +2254,49 @@ struct Index {
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
+  }
+
+  @Builder LogFilterChip(label: string, level: string) {
+    Text(label)
+      .fontSize(12)
+      .fontColor(this.logLevelFilter === level ? this.accentColor() : this.secondaryText())
+      .height(32)
+      .padding({ left: 12, right: 12 })
+      .backgroundColor(this.logLevelFilter === level ? '#17302F' : this.elevatedBg())
+      .borderRadius(10)
+      .onClick(() => {
+        this.setLogLevelFilter(level);
+      })
+  }
+
+  @Builder LogEventRow(event: RuntimeEvent) {
+    Column({ space: 6 }) {
+      Row({ space: 8 }) {
+        Text(event.level.toUpperCase())
+          .fontSize(10)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.eventToneColor(event.level))
+        Text(event.source)
+          .fontSize(10)
+          .fontColor(this.mutedText())
+        Text(this.eventTimeText(event))
+          .fontSize(10)
+          .fontColor(this.mutedText())
+          .layoutWeight(1)
+          .textAlign(TextAlign.End)
+      }
+      .width('100%')
+      Text(event.message)
+        .fontSize(12)
+        .fontColor(this.secondaryText())
+        .width('100%')
+        .maxLines(4)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(10)
   }
 
   @Builder SettingsPage() {
@@ -2205,11 +2467,47 @@ struct Index {
   @Builder DiagnosticsPage() {
     Scroll() {
       Column({ space: 12 }) {
-        this.DiagCard('Runtime 快照', 'VPN: ' + this.statusText, 'Core: ' + this.coreText)
+        Row({ space: 8 }) {
+          Button('复制诊断')
+            .height(34)
+            .fontSize(12)
+            .fontColor(this.accentColor())
+            .backgroundColor(this.elevatedBg())
+            .borderRadius(10)
+            .onClick(() => {
+              this.copyDiagnosticText();
+            })
+          Button('导出诊断')
+            .height(34)
+            .fontSize(12)
+            .fontColor(this.accentColor())
+            .backgroundColor(this.elevatedBg())
+            .borderRadius(10)
+            .onClick(() => {
+              this.exportDiagnostics();
+            })
+        }
+        .width('100%')
+
+        this.DiagCard('Runtime 快照', 'VPN: ' + this.statusText + ' · Core: ' + this.coreText,
+          'updatedAt: ' + this.snapshotUpdatedText() + ' · startedAt: ' + this.startedAtText())
+        this.DiagCard('Mihomo Core', 'version: ' + this.mihomoVersionText(),
+          'graceful stop: ' + this.gracefulStopText())
         this.DiagCard('Active Profile', this.activeProfileName, this.activeProfileId)
         this.DiagCard('当前节点', this.selectedProxyGroupLabel() + ' / ' + this.selectedNodeName(), this.selectedNodeMeta())
-        this.DiagCard('Bridge', 'tunFd: 来自 RuntimeSnapshot', this.lastError.length > 0 ? this.lastError : '最近错误: 无')
-        this.DiagCard('POC 回归', 'POC-05/06 与 smoke 结果待读取', 'M2-4 接入结构化诊断')
+        this.DiagCard('Bridge', 'tunFd: ' + this.tunFdText(), 'protect hook: ' + this.protectHookText())
+        this.DiagCard('设置', 'route=' + this.appSettings.routeMode + ' · mode=' + this.appSettings.proxyMode,
+          'dns=' + this.appSettings.dnsMode + ' · log=' + this.appSettings.logLevel)
+        this.DiagCard('最近错误', this.lastError.length > 0 ? this.lastError : '无',
+          this.runtimeEvents.length > 0 ? this.runtimeEvents[0].message : '暂无事件')
+        this.DiagCard('POC / Smoke', this.pocSmokeSummary(), '脚本摘要未接入时显示未运行')
+        if (this.lastDiagnosticPath.length > 0) {
+          this.DiagCard('导出文件', this.lastDiagnosticPath, '包含 snapshot、settings、active profile、最近 60 条事件')
+        }
+        if (this.diagnosticText.length > 0) {
+          this.DiagCard('诊断摘要', this.diagnosticText.substring(0, Math.min(80, this.diagnosticText.length)),
+            '完整内容已复制到系统剪贴板')
+        }
       }
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 28 })
