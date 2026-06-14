@@ -21,6 +21,14 @@ import { VpnControlService } from '../runtime/VpnControlService';
 const DOMAIN = 0x0001;
 const TAG = 'MihomoMvpPage';
 
+interface ProxyDelayRecord {
+  profileId: string;
+  groupName: string;
+  nodeName: string;
+  delay: number;
+  updatedAt: number;
+}
+
 @Entry
 @Component
 struct Index {
@@ -44,6 +52,7 @@ struct Index {
   @State proxyGroups: ProxyGroup[] = [];
   @State selectedProxyGroupName: string = '';
   @State nodeSearchText: string = '';
+  @State proxyDelayRecords: ProxyDelayRecord[] = [];
   @State sheetVisible: boolean = false;
   @State sheetProfileId: string = '';
   @State createMode: number = 1;
@@ -94,7 +103,7 @@ struct Index {
     const active = this.configService.getActiveProfile();
     this.activeProfileId = active.id;
     this.activeProfileName = active.name;
-    this.proxyGroups = this.configService.listProxyGroups(active.id);
+    this.proxyGroups = this.withMeasuredDelays(this.configService.listProxyGroups(active.id), active.id);
     if (this.proxyGroups.length === 0) {
       this.selectedProxyGroupName = '';
       this.nodes = [];
@@ -742,6 +751,109 @@ struct Index {
     this.nodes = this.getSelectedProxyGroupNodes();
   }
 
+  private testProxyLatency(scope: string): void {
+    if (!this.runtimeStore) {
+      return;
+    }
+    const targetGroups = this.getLatencyTargetGroups(scope);
+    if (targetGroups.length === 0) {
+      this.validationText = '暂无可测速节点';
+      this.runtimeStore.appendEvent('Latency test skipped: no proxy nodes');
+      return;
+    }
+
+    const now = Date.now();
+    let tested = 0;
+    let nextRecords = this.proxyDelayRecords.filter((record: ProxyDelayRecord) => {
+      for (const group of targetGroups) {
+        if (record.profileId === this.activeProfileId && record.groupName === group.name) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    for (const group of targetGroups) {
+      for (const node of group.nodes) {
+        if (node.name.length === 0) {
+          continue;
+        }
+        const record: ProxyDelayRecord = {
+          profileId: this.activeProfileId,
+          groupName: group.name,
+          nodeName: node.name,
+          delay: this.makePlaceholderDelay(group.name, node),
+          updatedAt: now
+        };
+        nextRecords = nextRecords.concat([record]);
+        tested++;
+      }
+    }
+
+    this.proxyDelayRecords = nextRecords;
+    this.proxyGroups = this.withMeasuredDelays(this.proxyGroups, this.activeProfileId);
+    this.nodes = this.getSelectedProxyGroupNodes();
+    this.validationText = scope === 'all' ? '测速全部完成（占位）' : '当前组测速完成（占位）';
+    this.runtimeStore.appendEvent('Latency test placeholder scope=' + scope + ' groups=' +
+      targetGroups.length.toString() + ' nodes=' + tested.toString());
+  }
+
+  private getLatencyTargetGroups(scope: string): ProxyGroup[] {
+    if (scope === 'all') {
+      return this.proxyGroups;
+    }
+    const group = this.getSelectedProxyGroup();
+    return group ? [group] : [];
+  }
+
+  private withMeasuredDelays(groups: ProxyGroup[], profileId: string): ProxyGroup[] {
+    return groups.map((group: ProxyGroup) => {
+      const nextNodes = group.nodes.map((node: ProxyNode) => {
+        const next: ProxyNode = {
+          name: node.name,
+          type: node.type,
+          server: node.server,
+          port: node.port,
+          group: node.group,
+          selected: node.selected,
+          delay: this.getMeasuredDelay(profileId, group.name, node.name, node.delay)
+        };
+        return next;
+      });
+      const nextGroup: ProxyGroup = {
+        name: group.name,
+        type: group.type,
+        selected: group.selected,
+        nodes: nextNodes
+      };
+      return nextGroup;
+    });
+  }
+
+  private getMeasuredDelay(profileId: string, groupName: string, nodeName: string, fallback: number): number {
+    for (const record of this.proxyDelayRecords) {
+      if (record.profileId === profileId && record.groupName === groupName && record.nodeName === nodeName) {
+        return record.delay;
+      }
+    }
+    return fallback;
+  }
+
+  private makePlaceholderDelay(groupName: string, node: ProxyNode): number {
+    const upperName = node.name.toUpperCase();
+    if (upperName === 'DIRECT') {
+      return 1;
+    }
+    if (upperName === 'REJECT') {
+      return 0;
+    }
+    let hash = groupName.length * 17 + node.name.length * 31 + node.type.length * 13;
+    for (let index = 0; index < node.name.length; index++) {
+      hash = (hash + node.name.charCodeAt(index) * (index + 3)) % 997;
+    }
+    return 45 + (hash % 260);
+  }
+
   private selectProxyNode(node: ProxyNode): void {
     if (!this.configService || !this.runtimeStore) {
       return;
@@ -1357,6 +1469,30 @@ struct Index {
             this.nodeSearchText = value;
           })
 
+        Row({ space: 10 }) {
+          Button('测速全部')
+            .height(42)
+            .layoutWeight(1)
+            .fontSize(13)
+            .fontColor(this.accentColor())
+            .backgroundColor(this.elevatedBg())
+            .borderRadius(10)
+            .onClick(() => {
+              this.testProxyLatency('all');
+            })
+          Button('测速当前组')
+            .height(42)
+            .layoutWeight(1)
+            .fontSize(13)
+            .fontColor(this.accentColor())
+            .backgroundColor(this.elevatedBg())
+            .borderRadius(10)
+            .onClick(() => {
+              this.testProxyLatency('group');
+            })
+        }
+        .width('100%')
+
         this.SectionTitle(this.getFilteredNodes().length.toString() + ' / ' +
           this.getSelectedProxyGroupNodes().length.toString() + ' 个节点 · ' + this.selectedProxyGroupLabel(), '')
 
@@ -1370,7 +1506,8 @@ struct Index {
 
         ForEach(this.getFilteredNodes(), (node: ProxyNode) => {
           this.NodeRow(node)
-        }, (node: ProxyNode) => node.group + '-' + node.name + '-' + (node.selected ? 'selected' : 'idle'))
+        }, (node: ProxyNode) => node.group + '-' + node.name + '-' + (node.selected ? 'selected' : 'idle') +
+          '-' + node.delay.toString())
       }
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 28 })
