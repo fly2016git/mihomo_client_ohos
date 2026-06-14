@@ -20,6 +20,7 @@ export interface MihomoLayout {
   runtimePath: string;
   settingsPath: string;
   proxySelectionPath: string;
+  proxyLatencyPath: string;
 }
 
 export interface Profile {
@@ -64,6 +65,24 @@ export interface ProxySelection {
 
 export interface ProxySelectionState {
   selections: ProxySelection[];
+}
+
+export type ProxyLatencyStatus = 'idle' | 'running' | 'complete' | 'error';
+
+export interface ProxyLatencyRecord {
+  profileId: string;
+  groupName: string;
+  nodeName: string;
+  delay: number;
+  updatedAt: number;
+}
+
+export interface ProxyLatencyState {
+  requestId: string;
+  status: ProxyLatencyStatus;
+  updatedAt: number;
+  error: string;
+  records: ProxyLatencyRecord[];
 }
 
 export interface ConfigValidationResult {

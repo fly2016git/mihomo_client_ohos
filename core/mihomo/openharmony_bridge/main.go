@@ -15,6 +15,8 @@ static inline int call_protect_fn(protect_fn fn, int fd) {
 import "C"
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,11 +25,14 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/metacubex/mihomo/adapter/outboundgroup"
+	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/config"
 	CN "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/listener"
+	"github.com/metacubex/mihomo/tunnel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -61,6 +66,25 @@ rules:
   - MATCH,DIRECT
 `
 
+const defaultDelayTestURL = "http://www.gstatic.com/generate_204"
+
+type delayItem struct {
+	Name  string `json:"name"`
+	Delay uint16 `json:"delay"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error"`
+}
+
+type delayResult struct {
+	OK        bool        `json:"ok"`
+	GroupName string      `json:"groupName"`
+	NodeName  string      `json:"nodeName"`
+	URL       string      `json:"url"`
+	TimeoutMs int         `json:"timeoutMs"`
+	Delays    []delayItem `json:"delays"`
+	Error     string      `json:"error"`
+}
+
 func setLastErr(err error) C.int {
 	if err != nil {
 		lastErrText = err.Error()
@@ -72,6 +96,62 @@ func setLastErr(err error) C.int {
 
 func bridgeLog(msg string) {
 	fmt.Fprintln(os.Stderr, "MihomoOhosBridge: "+msg)
+}
+
+func delayResultCString(result delayResult) *C.char {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return C.CString(fmt.Sprintf(`{"ok":false,"error":"marshal delay result failed: %s"}`, err.Error()))
+	}
+	return C.CString(string(data))
+}
+
+func normalizeDelayURL(raw string) string {
+	if raw == "" {
+		return defaultDelayTestURL
+	}
+	return raw
+}
+
+func normalizeDelayTimeout(timeoutMs int) time.Duration {
+	if timeoutMs <= 0 {
+		timeoutMs = 5000
+	}
+	if timeoutMs < 1000 {
+		timeoutMs = 1000
+	}
+	if timeoutMs > 30000 {
+		timeoutMs = 30000
+	}
+	return time.Duration(timeoutMs) * time.Millisecond
+}
+
+func getExpectedDelayStatus() utils.IntRanges[uint16] {
+	expected, err := utils.NewUnsignedRanges[uint16]("*")
+	if err != nil {
+		return nil
+	}
+	return expected
+}
+
+func mihomoIsStarted() bool {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return started
+}
+
+func findProxyByName(name string) CN.Proxy {
+	if proxy, ok := tunnel.Proxies()[name]; ok {
+		return proxy
+	}
+	for _, provider := range tunnel.Providers() {
+		for _, proxy := range provider.Proxies() {
+			if proxy.Name() == name {
+				return proxy
+			}
+		}
+	}
+	return nil
 }
 
 func tunStatusText() string {
@@ -453,6 +533,118 @@ func MihomoOhosGracefulStop() C.int {
 	stateMu.Unlock()
 	bridgeLog("MihomoOhosGracefulStop: complete")
 	return 0
+}
+
+//export MihomoOhosProxyDelay
+func MihomoOhosProxyDelay(nodeName *C.char, testURL *C.char, timeoutMs C.int) *C.char {
+	var node string
+	if nodeName != nil {
+		node = C.GoString(nodeName)
+	}
+	url := defaultDelayTestURL
+	if testURL != nil {
+		url = normalizeDelayURL(C.GoString(testURL))
+	}
+	result := delayResult{
+		OK:        false,
+		NodeName:  node,
+		URL:       url,
+		TimeoutMs: int(timeoutMs),
+		Delays:    []delayItem{},
+	}
+	if node == "" {
+		result.Error = "empty proxy node name"
+		return delayResultCString(result)
+	}
+	if !mihomoIsStarted() {
+		result.Error = "mihomo not running"
+		return delayResultCString(result)
+	}
+	proxy := findProxyByName(node)
+	if proxy == nil {
+		result.Error = "proxy not found: " + node
+		return delayResultCString(result)
+	}
+
+	timeout := normalizeDelayTimeout(int(timeoutMs))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	delay, err := proxy.URLTest(ctx, url, getExpectedDelayStatus())
+	item := delayItem{
+		Name:  node,
+		Delay: delay,
+		OK:    err == nil && delay > 0,
+	}
+	if ctx.Err() != nil {
+		item.Error = ctx.Err().Error()
+		result.Error = item.Error
+	} else if err != nil {
+		item.Error = err.Error()
+		result.Error = item.Error
+	} else if delay == 0 {
+		item.Error = "delay test returned zero"
+		result.Error = item.Error
+	}
+	result.OK = item.OK
+	result.Delays = []delayItem{item}
+	return delayResultCString(result)
+}
+
+//export MihomoOhosGroupDelay
+func MihomoOhosGroupDelay(groupName *C.char, testURL *C.char, timeoutMs C.int) *C.char {
+	var group string
+	if groupName != nil {
+		group = C.GoString(groupName)
+	}
+	url := defaultDelayTestURL
+	if testURL != nil {
+		url = normalizeDelayURL(C.GoString(testURL))
+	}
+	result := delayResult{
+		OK:        false,
+		GroupName: group,
+		URL:       url,
+		TimeoutMs: int(timeoutMs),
+		Delays:    []delayItem{},
+	}
+	if group == "" {
+		result.Error = "empty proxy group name"
+		return delayResultCString(result)
+	}
+	if !mihomoIsStarted() {
+		result.Error = "mihomo not running"
+		return delayResultCString(result)
+	}
+	proxy := findProxyByName(group)
+	if proxy == nil {
+		result.Error = "proxy group not found: " + group
+		return delayResultCString(result)
+	}
+	proxyGroup, ok := proxy.Adapter().(outboundgroup.ProxyGroup)
+	if !ok {
+		result.Error = "proxy is not a group: " + group
+		return delayResultCString(result)
+	}
+
+	timeout := normalizeDelayTimeout(int(timeoutMs))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	delays, err := proxyGroup.URLTest(ctx, url, getExpectedDelayStatus())
+	if err != nil {
+		result.Error = err.Error()
+	}
+	for name, delay := range delays {
+		result.Delays = append(result.Delays, delayItem{
+			Name:  name,
+			Delay: delay,
+			OK:    delay > 0,
+		})
+	}
+	result.OK = len(result.Delays) > 0 && result.Error == ""
+	if len(result.Delays) == 0 && result.Error == "" {
+		result.Error = "no proxy delay result"
+	}
+	return delayResultCString(result)
 }
 
 //export MihomoOhosLastError

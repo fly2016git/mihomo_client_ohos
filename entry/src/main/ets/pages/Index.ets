@@ -8,6 +8,8 @@ import {
   LogLevel,
   Profile,
   ProxyGroup,
+  ProxyLatencyRecord,
+  ProxyLatencyState,
   ProxyMode,
   ProxyNode,
   RuntimeSnapshot,
@@ -20,14 +22,6 @@ import { VpnControlService } from '../runtime/VpnControlService';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoMvpPage';
-
-interface ProxyDelayRecord {
-  profileId: string;
-  groupName: string;
-  nodeName: string;
-  delay: number;
-  updatedAt: number;
-}
 
 @Entry
 @Component
@@ -52,7 +46,8 @@ struct Index {
   @State proxyGroups: ProxyGroup[] = [];
   @State selectedProxyGroupName: string = '';
   @State nodeSearchText: string = '';
-  @State proxyDelayRecords: ProxyDelayRecord[] = [];
+  @State proxyDelayRecords: ProxyLatencyRecord[] = [];
+  @State latencyBusy: boolean = false;
   @State sheetVisible: boolean = false;
   @State sheetProfileId: string = '';
   @State createMode: number = 1;
@@ -103,6 +98,7 @@ struct Index {
     const active = this.configService.getActiveProfile();
     this.activeProfileId = active.id;
     this.activeProfileName = active.name;
+    this.proxyDelayRecords = this.configService.loadProxyLatencyState().records;
     this.proxyGroups = this.withMeasuredDelays(this.configService.listProxyGroups(active.id), active.id);
     if (this.proxyGroups.length === 0) {
       this.selectedProxyGroupName = '';
@@ -751,8 +747,11 @@ struct Index {
     this.nodes = this.getSelectedProxyGroupNodes();
   }
 
-  private testProxyLatency(scope: string): void {
-    if (!this.runtimeStore) {
+  private async testProxyLatency(scope: string): Promise<void> {
+    if (!this.runtimeStore || !this.vpnControlService || !this.configService) {
+      return;
+    }
+    if (this.latencyBusy) {
       return;
     }
     const targetGroups = this.getLatencyTargetGroups(scope);
@@ -762,40 +761,50 @@ struct Index {
       return;
     }
 
-    const now = Date.now();
-    let tested = 0;
-    let nextRecords = this.proxyDelayRecords.filter((record: ProxyDelayRecord) => {
-      for (const group of targetGroups) {
-        if (record.profileId === this.activeProfileId && record.groupName === group.name) {
-          return false;
-        }
+    this.latencyBusy = true;
+    this.validationText = scope === 'all' ? '正在测速全部节点' : '正在测速当前组';
+    try {
+      const requestId = 'lat-' + Date.now().toString();
+      const groupNames = targetGroups.map((group: ProxyGroup) => group.name);
+      await this.vpnControlService.requestProxyLatency(requestId, this.activeProfileId, groupNames,
+        this.delayTestUrl(), 8000);
+      const state = await this.waitProxyLatencyResult(requestId, Math.max(25000, groupNames.length * 10000 + 10000));
+      this.proxyDelayRecords = state.records;
+      this.proxyGroups = this.withMeasuredDelays(this.proxyGroups, this.activeProfileId);
+      this.nodes = this.getSelectedProxyGroupNodes();
+      if (state.status === 'complete') {
+        this.validationText = scope === 'all' ? '测速全部完成' : '当前组测速完成';
+      } else {
+        this.validationText = state.error.length > 0 ? state.error : '测速失败';
       }
-      return true;
-    });
-
-    for (const group of targetGroups) {
-      for (const node of group.nodes) {
-        if (node.name.length === 0) {
-          continue;
-        }
-        const record: ProxyDelayRecord = {
-          profileId: this.activeProfileId,
-          groupName: group.name,
-          nodeName: node.name,
-          delay: this.makePlaceholderDelay(group.name, node),
-          updatedAt: now
-        };
-        nextRecords = nextRecords.concat([record]);
-        tested++;
-      }
+    } catch (err) {
+      this.validationText = '测速失败: ' + this.toErrorText(err);
+      this.runtimeStore.appendEvent('Latency test error: ' + this.toErrorText(err));
+    } finally {
+      this.latencyBusy = false;
     }
+  }
 
-    this.proxyDelayRecords = nextRecords;
-    this.proxyGroups = this.withMeasuredDelays(this.proxyGroups, this.activeProfileId);
-    this.nodes = this.getSelectedProxyGroupNodes();
-    this.validationText = scope === 'all' ? '测速全部完成（占位）' : '当前组测速完成（占位）';
-    this.runtimeStore.appendEvent('Latency test placeholder scope=' + scope + ' groups=' +
-      targetGroups.length.toString() + ' nodes=' + tested.toString());
+  private async waitProxyLatencyResult(requestId: string, timeoutMs: number): Promise<ProxyLatencyState> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (this.configService) {
+        const state = this.configService.loadProxyLatencyState();
+        if (state.requestId === requestId && (state.status === 'complete' || state.status === 'error')) {
+          return state;
+        }
+      }
+      await this.sleep(500);
+    }
+    throw new Error('latency test timeout');
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    return new Promise<void>((resolve: () => void) => {
+      setTimeout(() => {
+        resolve();
+      }, ms);
+    });
   }
 
   private getLatencyTargetGroups(scope: string): ProxyGroup[] {
@@ -839,19 +848,8 @@ struct Index {
     return fallback;
   }
 
-  private makePlaceholderDelay(groupName: string, node: ProxyNode): number {
-    const upperName = node.name.toUpperCase();
-    if (upperName === 'DIRECT') {
-      return 1;
-    }
-    if (upperName === 'REJECT') {
-      return 0;
-    }
-    let hash = groupName.length * 17 + node.name.length * 31 + node.type.length * 13;
-    for (let index = 0; index < node.name.length; index++) {
-      hash = (hash + node.name.charCodeAt(index) * (index + 3)) % 997;
-    }
-    return 45 + (hash % 260);
+  private delayTestUrl(): string {
+    return 'http://www.gstatic.com/generate_204';
   }
 
   private selectProxyNode(node: ProxyNode): void {
@@ -1470,23 +1468,25 @@ struct Index {
           })
 
         Row({ space: 10 }) {
-          Button('测速全部')
+          Button(this.latencyBusy ? '测速中' : '测速全部')
             .height(42)
             .layoutWeight(1)
             .fontSize(13)
             .fontColor(this.accentColor())
             .backgroundColor(this.elevatedBg())
             .borderRadius(10)
+            .enabled(!this.latencyBusy)
             .onClick(() => {
               this.testProxyLatency('all');
             })
-          Button('测速当前组')
+          Button(this.latencyBusy ? '测速中' : '测速当前组')
             .height(42)
             .layoutWeight(1)
             .fontSize(13)
             .fontColor(this.accentColor())
             .backgroundColor(this.elevatedBg())
             .borderRadius(10)
+            .enabled(!this.latencyBusy)
             .onClick(() => {
               this.testProxyLatency('group');
             })

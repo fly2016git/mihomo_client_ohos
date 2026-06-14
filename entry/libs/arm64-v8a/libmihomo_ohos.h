@@ -108,6 +108,8 @@ extern int MihomoOhosStop();
 // goroutines are still actively using the fd-backed TUN.
 //
 extern int MihomoOhosGracefulStop();
+extern char* MihomoOhosProxyDelay(char* nodeName, char* testURL, int timeoutMs);
+extern char* MihomoOhosGroupDelay(char* groupName, char* testURL, int timeoutMs);
 extern char* MihomoOhosLastError();
 extern void MihomoOhosFreeCString(char* s);
 

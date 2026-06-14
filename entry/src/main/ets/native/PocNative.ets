@@ -38,6 +38,8 @@ interface PocNativeApi {
 
   // M2-3 placeholder: native bridge is not implemented yet.
   selectProxy(group: string, node: string): Promise<PocStatus>;
+  testMihomoProxyDelay(node: string, url: string, timeoutMs: number): Promise<string>;
+  testMihomoGroupDelay(group: string, url: string, timeoutMs: number): Promise<string>;
 }
 
 export default pocNative as PocNativeApi;

@@ -108,6 +108,32 @@ export class VpnControlService {
     }
   }
 
+  async requestProxyLatency(requestId: string, profileId: string, groupNames: string[], url: string,
+    timeoutMs: number): Promise<void> {
+    this.configService.saveProxyLatencyState({
+      requestId,
+      status: 'running',
+      updatedAt: Date.now(),
+      error: '',
+      records: this.configService.loadProxyLatencyState().records
+    });
+    this.runtimeStore.appendEvent('Latency test requested groups=' + groupNames.length.toString());
+    await vpnExtension.startVpnExtensionAbility({
+      bundleName: BUNDLE_NAME,
+      abilityName: VPN_ABILITY_NAME,
+      parameters: {
+        command: 'latency',
+        requestId,
+        profileId,
+        groupNames: groupNames.join('\n'),
+        url,
+        timeoutMs,
+        requestedAt: new Date().toISOString(),
+        requestedBy: 'ui'
+      }
+    });
+  }
+
   private async wait(ms: number): Promise<void> {
     return new Promise<void>((resolve: () => void) => {
       setTimeout(() => {

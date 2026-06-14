@@ -271,11 +271,11 @@ interface AppSettings {
 - `ConfigService` 已支持解析 `proxy-groups`、按 group 解析节点、读取内置 `DIRECT/REJECT` 节点、统计 rules 数量。
 - `selectLocalProxy(groupName, nodeName, profileId)` 已落地到 `mihomo/state/proxy-selections.json`，选择状态重启后保留。
 - 节点页已升级为代理组控制面：顶部 group tabs、节点搜索、当前 group 摘要、节点列表和点击选择。
-- 按原型补齐节点页 `测速全部`、`测速当前组` 两个入口；当前为本地占位测速，写入节点 delay 展示和运行事件，后续替换为 native/core 真实延迟 API。
+- 按原型补齐节点页 `测速全部`、`测速当前组` 两个入口；占位测速已替换为 native/core 真实延迟 API，通过 VPN Extension 进程调用 mihomo `URLTest` 并写入共享测速状态。
 - 首页当前节点卡片和诊断面板已从当前 group/node 读取，不再写死 `Proxy`。
 - Profile chips/列表已展示当前配置规则数量。
 - `PocNative` 已增加 `selectProxy(group, node)` 类型定义占位；native/core 实时切换尚未实现，运行中选择节点会提示“重连后生效”，不会误报核心已切换。
-- 真机 `192.168.3.65:37805` 已完成最终 HAP 覆盖安装和冒烟验证：节点页显示 `Auto` group、搜索框、`测速全部`、`测速当前组`、`28 / 28` 节点；选择 `爱沙尼亚-EE-1-流量倍率:0.2` 后，节点列表选中圆点、首页当前节点、诊断页 `Auto / 爱沙尼亚-EE-1-流量倍率:0.2` 同步更新；点击 `测速当前组` 后节点列表显示 ms 延迟并写入 `Latency test placeholder scope=group groups=1 nodes=28` 运行事件。
+- 真机 `192.168.3.65:37805` 已完成最终 HAP 覆盖安装和冒烟验证：节点页显示 `Auto` group、搜索框、`测速全部`、`测速当前组`、`28 / 28` 节点；选择 `爱沙尼亚-EE-1-流量倍率:0.2` 后，节点列表选中圆点、首页当前节点、诊断页 `Auto / 爱沙尼亚-EE-1-流量倍率:0.2` 同步更新；真实延迟验证写入 `Latency test native scope=request groups=1 ok=21 failed=0` 运行事件，并在 `proxy-latency.json` 生成 21 条真实 ms 记录。
 
 遗留到后续里程碑：
 

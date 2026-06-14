@@ -9,6 +9,8 @@ import {
   MihomoLayout,
   Profile,
   ProxyGroup,
+  ProxyLatencyRecord,
+  ProxyLatencyState,
   ProxyMode,
   ProxyNode,
   ProxySelection,
@@ -82,7 +84,8 @@ export class ConfigService {
       profilesPath: baseDir + '/state/profiles.json',
       runtimePath: baseDir + '/state/runtime.json',
       settingsPath: baseDir + '/state/settings.json',
-      proxySelectionPath: baseDir + '/state/proxy-selections.json'
+      proxySelectionPath: baseDir + '/state/proxy-selections.json',
+      proxyLatencyPath: baseDir + '/state/proxy-latency.json'
     };
 
     this.ensureDir(layout.baseDir);
@@ -470,6 +473,31 @@ export class ConfigService {
     return this.countRulesInYaml(this.loadRawYaml(profile.id));
   }
 
+  loadProxyLatencyState(): ProxyLatencyState {
+    const layout = this.ensureLayout();
+    if (!this.pathExists(layout.proxyLatencyPath)) {
+      return this.createEmptyProxyLatencyState();
+    }
+    try {
+      const parsed = JSON.parse(fs.readTextSync(layout.proxyLatencyPath)) as ProxyLatencyState;
+      return {
+        requestId: parsed.requestId ? parsed.requestId : '',
+        status: parsed.status === 'running' || parsed.status === 'complete' || parsed.status === 'error' ?
+          parsed.status : 'idle',
+        updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+        error: parsed.error ? parsed.error : '',
+        records: parsed.records ? parsed.records : []
+      };
+    } catch (_) {
+      return this.createEmptyProxyLatencyState();
+    }
+  }
+
+  saveProxyLatencyState(state: ProxyLatencyState): void {
+    const layout = this.ensureLayout();
+    this.writeTextFileAtomic(layout.proxyLatencyPath, JSON.stringify(state));
+  }
+
   pathExists(path: string): boolean {
     try {
       return fs.accessSync(path);
@@ -850,6 +878,16 @@ export class ConfigService {
     } catch (_) {
       return { selections: [] };
     }
+  }
+
+  private createEmptyProxyLatencyState(): ProxyLatencyState {
+    return {
+      requestId: '',
+      status: 'idle',
+      updatedAt: 0,
+      error: '',
+      records: [] as ProxyLatencyRecord[]
+    };
   }
 
   private saveProxySelectionState(state: ProxySelectionState): void {

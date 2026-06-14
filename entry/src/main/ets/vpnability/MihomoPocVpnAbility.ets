@@ -4,7 +4,7 @@ import { connection, VpnExtensionAbility, vpnExtension } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConfigService } from '../config/ConfigService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
-import { Profile } from '../models/MvpTypes';
+import { Profile, ProxyLatencyRecord, ProxyLatencyState } from '../models/MvpTypes';
 import { SettingsService } from '../settings/SettingsService';
 import pocNative, { PocStatus } from '../native/PocNative';
 
@@ -128,6 +128,23 @@ interface ProductVpnOptions {
   routeDefaultFlag: boolean;
   ipv6Enabled: boolean;
   udpEnabled: boolean;
+}
+
+interface NativeDelayItem {
+  name: string;
+  delay: number;
+  ok: boolean;
+  error: string;
+}
+
+interface NativeDelayResult {
+  ok: boolean;
+  groupName: string;
+  nodeName: string;
+  url: string;
+  timeoutMs: number;
+  delays: NativeDelayItem[];
+  error: string;
 }
 
 interface TunSnapshot {
@@ -254,6 +271,12 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       });
       return;
     }
+    if (this.isProductLatencyWant(want)) {
+      this.runProductLatency(want).catch((err: Object) => {
+        hilog.error(DOMAIN, TAG, 'product latency async failed: %{public}s', this.toErrorText(err));
+      });
+      return;
+    }
     this.startVpnForPoc(want, 'onRequest').catch((err: Object) => {
       hilog.error(DOMAIN, TAG, 'onRequest async failed: %{public}s', this.toErrorText(err));
     });
@@ -262,6 +285,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   async onConnect(want: Want): Promise<void> {
     if (this.isProductConnectWant(want)) {
       await this.startVpnForProduct(want, 'onConnect');
+      return;
+    }
+    if (this.isProductLatencyWant(want)) {
+      await this.runProductLatency(want);
       return;
     }
     await this.startVpnForPoc(want, 'onConnect');
@@ -275,6 +302,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   private isProductDisconnectWant(want: Want): boolean {
     const params = want.parameters as Record<string, Object> | undefined;
     return this.getStringParam(params, 'command', '').toLowerCase() === 'disconnect';
+  }
+
+  private isProductLatencyWant(want: Want): boolean {
+    const params = want.parameters as Record<string, Object> | undefined;
+    return this.getStringParam(params, 'command', '').toLowerCase() === 'latency';
   }
 
   private async startVpnForProduct(want: Want, source: string): Promise<void> {
@@ -428,6 +460,101 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       throw new Error('PROTECT_REGISTER_FAILED: ' + regStatus.message);
     }
     store.appendEvent('Protect callback registered');
+  }
+
+  private async runProductLatency(want: Want): Promise<void> {
+    const store = new RuntimeStore(this.context.filesDir);
+    const configService = new ConfigService(this.context.filesDir);
+    const params = want.parameters as Record<string, Object> | undefined;
+    const requestId = this.getStringParam(params, 'requestId', 'latency-' + Date.now().toString());
+    const profileId = this.getStringParam(params, 'profileId', 'default');
+    const groupNames = this.parseLatencyGroupNames(this.getStringParam(params, 'groupNames', ''));
+    const url = this.getStringParam(params, 'url', 'http://www.gstatic.com/generate_204');
+    const timeoutMs = this.getNumberParam(params, 'timeoutMs', 8000);
+    const previous = configService.loadProxyLatencyState().records;
+    const remaining = previous.filter((record: ProxyLatencyRecord) => {
+      return record.profileId !== profileId || groupNames.indexOf(record.groupName) < 0;
+    });
+
+    hilog.info(DOMAIN, TAG, 'product latency request id=%{public}s profile=%{public}s groups=%{public}d',
+      requestId, profileId, groupNames.length);
+
+    if (groupNames.length === 0) {
+      this.saveProductLatencyState(configService, requestId, 'error', 'no latency groups requested', previous);
+      store.appendEvent('Latency test error: no latency groups requested');
+      return;
+    }
+
+    if (this.mihomoStartedBy.length === 0) {
+      this.saveProductLatencyState(configService, requestId, 'error',
+        'mihomo not running in VPN process', previous);
+      store.appendEvent('Latency test error: mihomo not running in VPN process');
+      return;
+    }
+
+    const now = Date.now();
+    const nextRecords: ProxyLatencyRecord[] = [];
+    const errors: string[] = [];
+    let tested = 0;
+    let failed = 0;
+
+    for (const groupName of groupNames) {
+      try {
+        const json = await pocNative.testMihomoGroupDelay(groupName, url, timeoutMs);
+        const result = this.parseNativeDelayResult(json);
+        if (!result.ok && result.error.length > 0) {
+          errors.push(groupName + ': ' + result.error);
+        }
+        for (const item of result.delays) {
+          if (item.ok && item.delay > 0) {
+            nextRecords.push({
+              profileId,
+              groupName,
+              nodeName: item.name,
+              delay: item.delay,
+              updatedAt: now
+            });
+            tested += 1;
+          } else {
+            failed += 1;
+            if (item.error.length > 0) {
+              errors.push(item.name + ': ' + item.error);
+            }
+          }
+        }
+      } catch (err) {
+        failed += 1;
+        errors.push(groupName + ': ' + this.toErrorText(err));
+      }
+    }
+
+    const errorText = errors.length > 0 ? errors[0] : '';
+    const records = remaining.concat(nextRecords);
+    const status = tested > 0 ? 'complete' : 'error';
+    configService.saveProxyLatencyState({
+      requestId,
+      status,
+      updatedAt: Date.now(),
+      error: status === 'complete' ? errorText : (errorText.length > 0 ? errorText : 'latency test failed'),
+      records
+    });
+    store.appendEvent('Latency test native scope=request groups=' + groupNames.length.toString() +
+      ' ok=' + tested.toString() + ' failed=' + failed.toString());
+    if (errorText.length > 0) {
+      store.appendEvent('Latency test error: ' + errorText);
+    }
+  }
+
+  private saveProductLatencyState(configService: ConfigService, requestId: string, status: 'error',
+    error: string, records: ProxyLatencyRecord[]): void {
+    const state: ProxyLatencyState = {
+      requestId,
+      status,
+      updatedAt: Date.now(),
+      error,
+      records
+    };
+    configService.saveProxyLatencyState(state);
   }
 
   private async stopVpnForProduct(source: string): Promise<void> {
@@ -1466,6 +1593,42 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       return err.name + ': ' + err.message;
     }
     return JSON.stringify(err);
+  }
+
+  private parseLatencyGroupNames(raw: string): string[] {
+    const names: string[] = [];
+    for (const item of raw.split('\n')) {
+      const name = item.trim();
+      if (name.length > 0 && names.indexOf(name) < 0) {
+        names.push(name);
+      }
+    }
+    return names;
+  }
+
+  private parseNativeDelayResult(json: string): NativeDelayResult {
+    try {
+      const parsed = JSON.parse(json) as NativeDelayResult;
+      return {
+        ok: typeof parsed.ok === 'boolean' ? parsed.ok : false,
+        groupName: parsed.groupName ? parsed.groupName : '',
+        nodeName: parsed.nodeName ? parsed.nodeName : '',
+        url: parsed.url ? parsed.url : '',
+        timeoutMs: typeof parsed.timeoutMs === 'number' ? parsed.timeoutMs : 0,
+        delays: parsed.delays ? parsed.delays : [],
+        error: parsed.error ? parsed.error : ''
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        groupName: '',
+        nodeName: '',
+        url: '',
+        timeoutMs: 0,
+        delays: [],
+        error: this.toErrorText(err)
+      };
+    }
   }
 
   private isTryAgainError(errorText: string): boolean {

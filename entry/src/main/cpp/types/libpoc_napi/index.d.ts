@@ -24,6 +24,8 @@ declare const pocNative: {
   stopMihomo(): Promise<PocStatus>;
   startTunFdReadinessProbe(tunFd: number, durationMs: number): PocStatus;
   startTunFdPollProbe(tunFd: number, durationMs: number): PocStatus;
+  testMihomoProxyDelay(node: string, url: string, timeoutMs: number): Promise<string>;
+  testMihomoGroupDelay(group: string, url: string, timeoutMs: number): Promise<string>;
 };
 
 export default pocNative;

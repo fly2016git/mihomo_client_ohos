@@ -52,6 +52,8 @@ using MihomoOhosEnableProtectHookFn = int32_t (*)();
 using MihomoOhosDisableProtectHookFn = int32_t (*)();
 using MihomoOhosIsRunningFn = int32_t (*)();
 using MihomoOhosLastErrorFn = const char *(*)();
+using MihomoOhosProxyDelayFn = const char *(*)(const char *, const char *, int32_t);
+using MihomoOhosGroupDelayFn = const char *(*)(const char *, const char *, int32_t);
 using MihomoOhosFreeCStringFn = void (*)(void *);
 
 struct GoCoreApi {
@@ -89,6 +91,8 @@ struct MihomoCoreApi {
     MihomoOhosDisableProtectHookFn disableProtectHook = nullptr;
     MihomoOhosIsRunningFn isRunning = nullptr;
     MihomoOhosLastErrorFn lastErrorFn = nullptr;
+    MihomoOhosProxyDelayFn proxyDelay = nullptr;
+    MihomoOhosGroupDelayFn groupDelay = nullptr;
     MihomoOhosFreeCStringFn freeString = nullptr;
     std::string lastError;
 };
@@ -146,6 +150,18 @@ struct MihomoAsyncData {
     std::string message;
     int32_t code = 0;
     bool ok = false;
+};
+
+struct MihomoDelayAsyncData {
+    napi_env env = nullptr;
+    napi_async_work work = nullptr;
+    napi_deferred deferred = nullptr;
+    bool group = false;
+    std::string name;
+    std::string url;
+    int32_t timeoutMs = 5000;
+    std::string result;
+    std::string error;
 };
 
 int ProtectResultFromValue(napi_env env, napi_value value)
@@ -536,16 +552,20 @@ bool EnsureMihomoCoreLocked()
     LoadSymbol(handle, "MihomoOhosDisableProtectHook", reinterpret_cast<void **>(&next.disableProtectHook));
     LoadSymbol(handle, "MihomoOhosIsRunning", reinterpret_cast<void **>(&next.isRunning));
     LoadSymbol(handle, "MihomoOhosGracefulStop", reinterpret_cast<void **>(&next.gracefulStop));
+    LoadSymbol(handle, "MihomoOhosProxyDelay", reinterpret_cast<void **>(&next.proxyDelay));
+    LoadSymbol(handle, "MihomoOhosGroupDelay", reinterpret_cast<void **>(&next.groupDelay));
 
     next.lastError.clear();
     next.setProtectBridge(reinterpret_cast<void *>(NapiProtectBridgeImpl));
     g_mihomo = next;
     OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
-        "mihomo core loaded and protect bridge registered hooks=%{public}d/%{public}d/%{public}d graceful=%{public}d",
+        "mihomo core loaded and protect bridge registered hooks=%{public}d/%{public}d/%{public}d graceful=%{public}d delay=%{public}d/%{public}d",
         next.enableProtectHook != nullptr ? 1 : 0,
         next.disableProtectHook != nullptr ? 1 : 0,
         next.isRunning != nullptr ? 1 : 0,
-        next.gracefulStop != nullptr ? 1 : 0);
+        next.gracefulStop != nullptr ? 1 : 0,
+        next.proxyDelay != nullptr ? 1 : 0,
+        next.groupDelay != nullptr ? 1 : 0);
     return true;
 }
 
@@ -1682,6 +1702,120 @@ napi_value PingMihomo(napi_env env, napi_callback_info info)
     return promise;
 }
 
+napi_value TestMihomoDelay(napi_env env, napi_callback_info info, bool group)
+{
+    size_t argc = 3;
+    napi_value args[3] = { nullptr, nullptr, nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    if (argc < 1) {
+        return MakeRejectedPromise(env, group ? "testMihomoGroupDelay requires group name" :
+            "testMihomoProxyDelay requires node name");
+    }
+
+    std::string name;
+    if (!ReadStringArg(env, args[0], &name) || name.empty()) {
+        return MakeRejectedPromise(env, group ? "group name must be a non-empty string" :
+            "node name must be a non-empty string");
+    }
+
+    std::string url = "http://www.gstatic.com/generate_204";
+    if (argc >= 2 && args[1] != nullptr) {
+        std::string candidate;
+        if (ReadStringArg(env, args[1], &candidate) && !candidate.empty()) {
+            url = candidate;
+        }
+    }
+
+    int32_t timeoutMs = 5000;
+    if (argc >= 3 && args[2] != nullptr) {
+        napi_get_value_int32(env, args[2], &timeoutMs);
+    }
+    if (timeoutMs <= 0) {
+        timeoutMs = 5000;
+    }
+
+    auto *data = new MihomoDelayAsyncData();
+    data->env = env;
+    data->group = group;
+    data->name = name;
+    data->url = url;
+    data->timeoutMs = timeoutMs;
+
+    napi_value promise = nullptr;
+    napi_create_promise(env, &data->deferred, &promise);
+
+    napi_value resourceName = nullptr;
+    napi_create_string_utf8(env, group ? "PocMihomoGroupDelay" : "PocMihomoProxyDelay", NAPI_AUTO_LENGTH,
+        &resourceName);
+
+    napi_status status = napi_create_async_work(
+        env,
+        nullptr,
+        resourceName,
+        [](napi_env env, void *rawData) {
+            (void)env;
+            auto *workData = static_cast<MihomoDelayAsyncData *>(rawData);
+            std::lock_guard<std::mutex> lock(g_mihomoMutex);
+            if (!EnsureMihomoCoreLocked()) {
+                workData->error = g_mihomo.lastError;
+                return;
+            }
+            if (workData->group) {
+                if (g_mihomo.groupDelay == nullptr) {
+                    workData->error = "MihomoOhosGroupDelay not available";
+                    return;
+                }
+                const char *jsonResult = g_mihomo.groupDelay(workData->name.c_str(), workData->url.c_str(),
+                    workData->timeoutMs);
+                workData->result = TakeMihomoStringLocked(jsonResult);
+            } else {
+                if (g_mihomo.proxyDelay == nullptr) {
+                    workData->error = "MihomoOhosProxyDelay not available";
+                    return;
+                }
+                const char *jsonResult = g_mihomo.proxyDelay(workData->name.c_str(), workData->url.c_str(),
+                    workData->timeoutMs);
+                workData->result = TakeMihomoStringLocked(jsonResult);
+            }
+        },
+        [](napi_env env, napi_status status, void *rawData) {
+            auto *workData = static_cast<MihomoDelayAsyncData *>(rawData);
+            if (status != napi_ok) {
+                napi_reject_deferred(env, workData->deferred, MakeString(env, "mihomo delay async work failed"));
+            } else if (!workData->error.empty()) {
+                napi_reject_deferred(env, workData->deferred, MakeString(env, workData->error));
+            } else {
+                OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                    "mihomo delay result: %{public}s", workData->result.c_str());
+                napi_resolve_deferred(env, workData->deferred, MakeString(env, workData->result));
+            }
+            napi_delete_async_work(env, workData->work);
+            delete workData;
+        },
+        data,
+        &data->work
+    );
+
+    if (status != napi_ok || napi_queue_async_work(env, data->work) != napi_ok) {
+        napi_delete_async_work(env, data->work);
+        delete data;
+        return MakeRejectedPromise(env, "failed to queue mihomo delay async work");
+    }
+
+    return promise;
+}
+
+napi_value TestMihomoProxyDelay(napi_env env, napi_callback_info info)
+{
+    return TestMihomoDelay(env, info, false);
+}
+
+napi_value TestMihomoGroupDelay(napi_env env, napi_callback_info info)
+{
+    return TestMihomoDelay(env, info, true);
+}
+
 // ---------- MVP-01B: protect hook control ----------
 
 napi_value EnableProtectHook(napi_env env, napi_callback_info info)
@@ -1865,6 +1999,8 @@ napi_value Init(napi_env env, napi_value exports)
         { "disableProtectHook", nullptr, DisableProtectHook, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "isMihomoRunning", nullptr, IsMihomoRunning, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "gracefulStopMihomo", nullptr, GracefulStopMihomo, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "testMihomoProxyDelay", nullptr, TestMihomoProxyDelay, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "testMihomoGroupDelay", nullptr, TestMihomoGroupDelay, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "startTunFdReadinessProbe", nullptr, StartTunFdReadinessProbe, nullptr, nullptr, nullptr, napi_default,
             nullptr },
         { "startTunFdPollProbe", nullptr, StartTunFdPollProbe, nullptr, nullptr, nullptr, napi_default, nullptr },
