@@ -7,6 +7,7 @@ import {
   DnsMode,
   LogLevel,
   Profile,
+  ProxyGroup,
   ProxyMode,
   ProxyNode,
   RuntimeSnapshot,
@@ -40,6 +41,9 @@ struct Index {
   @State uploadSpeed: number = 0;
   @State downloadSpeed: number = 0;
   @State nodes: ProxyNode[] = [];
+  @State proxyGroups: ProxyGroup[] = [];
+  @State selectedProxyGroupName: string = '';
+  @State nodeSearchText: string = '';
   @State sheetVisible: boolean = false;
   @State sheetProfileId: string = '';
   @State createMode: number = 1;
@@ -90,7 +94,16 @@ struct Index {
     const active = this.configService.getActiveProfile();
     this.activeProfileId = active.id;
     this.activeProfileName = active.name;
-    this.nodes = this.configService.listProxyNodes(active.id);
+    this.proxyGroups = this.configService.listProxyGroups(active.id);
+    if (this.proxyGroups.length === 0) {
+      this.selectedProxyGroupName = '';
+      this.nodes = [];
+      return;
+    }
+    if (this.selectedProxyGroupName.length === 0 || !this.hasProxyGroup(this.selectedProxyGroupName)) {
+      this.selectedProxyGroupName = this.proxyGroups[0].name;
+    }
+    this.nodes = this.getSelectedProxyGroupNodes();
   }
 
   private loadSettings(): void {
@@ -372,6 +385,13 @@ struct Index {
     return profile.type === 'subscription' ? '等待更新' : '本地配置';
   }
 
+  private profileRuleText(profile: Profile): string {
+    if (!this.configService) {
+      return '0 rules';
+    }
+    return this.configService.countRules(profile.id).toString() + ' rules';
+  }
+
   private profileDateText(profile: Profile): string {
     if (profile.subscription && profile.subscription.lastSuccessAt > 0) {
       return this.formatDate(profile.subscription.lastSuccessAt);
@@ -642,23 +662,103 @@ struct Index {
   }
 
   private selectedNodeName(): string {
-    if (this.nodes.length === 0) {
+    const group = this.getSelectedProxyGroup();
+    const nodes = group ? group.nodes : this.nodes;
+    if (nodes.length === 0) {
       return 'DIRECT';
     }
-    for (const node of this.nodes) {
+    for (const node of nodes) {
       if (node.selected) {
         return node.name;
       }
     }
-    return this.nodes[0].name;
+    return nodes[0].name;
   }
 
   private selectedNodeMeta(): string {
-    if (this.nodes.length === 0) {
+    const group = this.getSelectedProxyGroup();
+    const nodes = group ? group.nodes : this.nodes;
+    if (nodes.length === 0) {
       return 'Direct · --';
     }
-    const node = this.nodes[0];
+    let node = nodes[0];
+    for (const item of nodes) {
+      if (item.selected) {
+        node = item;
+        break;
+      }
+    }
     return node.type.toUpperCase() + ' · ' + (node.delay > 0 ? node.delay.toString() + ' ms' : '--');
+  }
+
+  private selectedProxyGroupLabel(): string {
+    const group = this.getSelectedProxyGroup();
+    return group ? group.name : 'Proxy';
+  }
+
+  private selectedProxyGroupType(): string {
+    const group = this.getSelectedProxyGroup();
+    return group ? group.type : 'select';
+  }
+
+  private hasProxyGroup(name: string): boolean {
+    for (const group of this.proxyGroups) {
+      if (group.name === name) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private getSelectedProxyGroup(): ProxyGroup | null {
+    for (const group of this.proxyGroups) {
+      if (group.name === this.selectedProxyGroupName) {
+        return group;
+      }
+    }
+    return this.proxyGroups.length > 0 ? this.proxyGroups[0] : null;
+  }
+
+  private getSelectedProxyGroupNodes(): ProxyNode[] {
+    const group = this.getSelectedProxyGroup();
+    return group ? group.nodes : [];
+  }
+
+  private getFilteredNodes(): ProxyNode[] {
+    const nodes = this.getSelectedProxyGroupNodes();
+    const keyword = this.nodeSearchText.trim().toLowerCase();
+    if (keyword.length === 0) {
+      return nodes;
+    }
+    return nodes.filter((node: ProxyNode) => {
+      return node.name.toLowerCase().indexOf(keyword) >= 0 ||
+        node.type.toLowerCase().indexOf(keyword) >= 0 ||
+        node.server.toLowerCase().indexOf(keyword) >= 0;
+    });
+  }
+
+  private selectProxyGroup(name: string): void {
+    this.selectedProxyGroupName = name;
+    this.nodes = this.getSelectedProxyGroupNodes();
+  }
+
+  private selectProxyNode(node: ProxyNode): void {
+    if (!this.configService || !this.runtimeStore) {
+      return;
+    }
+    const ok = this.configService.selectLocalProxy(node.group, node.name, this.activeProfileId);
+    if (!ok) {
+      this.validationText = '节点选择失败';
+      this.runtimeStore.appendEvent('Proxy select failed group=' + node.group + ' node=' + node.name);
+      return;
+    }
+    const running = this.statusText === 'Connected' || this.statusText === 'Starting' || this.coreText === 'Running';
+    this.validationText = running ? '节点选择已保存，重连后生效' : '节点选择已保存';
+    this.runtimeStore.appendEvent(running ?
+      'Proxy selected locally; reconnect required group=' + node.group + ' node=' + node.name :
+      'Proxy selected locally group=' + node.group + ' node=' + node.name);
+    this.reloadProfiles();
+    this.refreshState();
   }
 
   private cycleRouteMode(): void {
@@ -1002,7 +1102,7 @@ struct Index {
         .width(38)
         .textAlign(TextAlign.Center)
       Column({ space: 4 }) {
-        Text('当前节点 · Proxy')
+        Text('当前节点 · ' + this.selectedProxyGroupLabel())
           .fontSize(11)
           .fontColor(this.mutedText())
         Text(this.selectedNodeName())
@@ -1110,7 +1210,8 @@ struct Index {
                 .fontColor(p.active ? this.accentColor() : this.secondaryText())
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
-              Text((p.type === 'subscription' ? 'sub' : 'local') + ' · ' + (p.active ? 'active' : this.profileRelativeText(p)))
+              Text((p.type === 'subscription' ? 'sub' : 'local') + ' · ' + this.profileRuleText(p) +
+                ' · ' + (p.active ? 'active' : this.profileRelativeText(p)))
                 .fontSize(10)
                 .fontColor(p.active ? '#78E2D5' : this.mutedText())
                 .maxLines(1)
@@ -1231,22 +1332,45 @@ struct Index {
   @Builder ProxyPage() {
     Scroll() {
       Column({ space: 14 }) {
-        Row({ space: 8 }) {
-          this.ModeChip('规则', true)
-          this.ModeChip('全局', false)
-          this.ModeChip('直连', false)
+        if (this.proxyGroups.length > 0) {
+          Scroll() {
+            Row({ space: 8 }) {
+              ForEach(this.proxyGroups, (group: ProxyGroup) => {
+                this.ProxyGroupChip(group)
+              }, (group: ProxyGroup) => group.name)
+            }
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
+          .width('100%')
         }
-        .width('100%')
 
-        this.SectionTitle(this.nodes.length.toString() + ' 个节点来自 ' + this.activeProfileName, '')
+        TextInput({ text: this.nodeSearchText, placeholder: '搜索节点、类型或地址' })
+          .height(44)
+          .width('100%')
+          .fontSize(13)
+          .fontColor(this.primaryText())
+          .placeholderColor(this.mutedText())
+          .backgroundColor(this.inputBg())
+          .borderRadius(10)
+          .onChange((value: string) => {
+            this.nodeSearchText = value;
+          })
+
+        this.SectionTitle(this.getFilteredNodes().length.toString() + ' / ' +
+          this.getSelectedProxyGroupNodes().length.toString() + ' 个节点 · ' + this.selectedProxyGroupLabel(), '')
+
+        this.ProxyGroupSummary()
 
         if (this.nodes.length === 0) {
           this.EmptyCard('暂无节点', '请先在配置页更新或导入包含 proxies 的配置')
+        } else if (this.getFilteredNodes().length === 0) {
+          this.EmptyCard('无匹配节点', '请调整搜索关键字')
         }
 
-        ForEach(this.nodes, (node: ProxyNode) => {
+        ForEach(this.getFilteredNodes(), (node: ProxyNode) => {
           this.NodeRow(node)
-        }, (node: ProxyNode) => node.name)
+        }, (node: ProxyNode) => node.group + '-' + node.name + '-' + (node.selected ? 'selected' : 'idle'))
       }
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 28 })
@@ -1267,6 +1391,64 @@ struct Index {
       .fontColor(selected ? '#042F2E' : this.secondaryText())
       .backgroundColor(selected ? this.accentColor() : this.elevatedBg())
       .borderRadius(10)
+  }
+
+  @Builder ProxyGroupChip(group: ProxyGroup) {
+    Column({ space: 2 }) {
+      Text(group.name)
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(group.name === this.selectedProxyGroupName ? '#042F2E' : this.secondaryText())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Text(group.type + ' · ' + group.nodes.length.toString())
+        .fontSize(10)
+        .fontColor(group.name === this.selectedProxyGroupName ? '#0F766E' : this.mutedText())
+        .maxLines(1)
+    }
+    .height(48)
+    .width(138)
+    .justifyContent(FlexAlign.Center)
+    .padding({ left: 10, right: 10 })
+    .backgroundColor(group.name === this.selectedProxyGroupName ? this.accentColor() : this.elevatedBg())
+    .borderRadius(10)
+    .onClick(() => {
+      this.selectProxyGroup(group.name);
+    })
+  }
+
+  @Builder ProxyGroupSummary() {
+    Row({ space: 12 }) {
+      Text('◎')
+        .fontSize(20)
+        .fontColor(this.accentColor())
+        .width(30)
+        .textAlign(TextAlign.Center)
+      Column({ space: 4 }) {
+        Text(this.selectedProxyGroupLabel())
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text('当前: ' + this.selectedNodeName())
+          .fontSize(12)
+          .fontColor(this.secondaryText())
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Text(this.selectedProxyGroupType())
+        .fontSize(11)
+        .fontColor(this.mutedText())
+        .maxLines(1)
+    }
+    .width('100%')
+    .height(66)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
   }
 
   @Builder NodeRow(node: ProxyNode) {
@@ -1302,6 +1484,9 @@ struct Index {
     .padding({ left: 12, right: 12 })
     .backgroundColor(this.surfaceBg())
     .borderRadius(12)
+    .onClick(() => {
+      this.selectProxyNode(node);
+    })
   }
 
   @Builder ConfigPage() {
@@ -1404,7 +1589,7 @@ struct Index {
           .fontColor(this.primaryText())
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.profileTypeLabel(p) + ' · ' + this.profileTrafficText(p))
+        Text(this.profileTypeLabel(p) + ' · ' + this.profileTrafficText(p) + ' · ' + this.profileRuleText(p))
           .fontSize(12)
           .fontColor(this.secondaryText())
           .maxLines(1)
@@ -1885,7 +2070,7 @@ struct Index {
       Column({ space: 12 }) {
         this.DiagCard('Runtime 快照', 'VPN: ' + this.statusText, 'Core: ' + this.coreText)
         this.DiagCard('Active Profile', this.activeProfileName, this.activeProfileId)
-        this.DiagCard('当前节点', 'Proxy / ' + this.selectedNodeName(), this.selectedNodeMeta())
+        this.DiagCard('当前节点', this.selectedProxyGroupLabel() + ' / ' + this.selectedNodeName(), this.selectedNodeMeta())
         this.DiagCard('Bridge', 'tunFd: 来自 RuntimeSnapshot', this.lastError.length > 0 ? this.lastError : '最近错误: 无')
         this.DiagCard('POC 回归', 'POC-05/06 与 smoke 结果待读取', 'M2-4 接入结构化诊断')
       }

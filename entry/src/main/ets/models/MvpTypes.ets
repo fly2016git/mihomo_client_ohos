@@ -19,6 +19,7 @@ export interface MihomoLayout {
   profilesPath: string;
   runtimePath: string;
   settingsPath: string;
+  proxySelectionPath: string;
 }
 
 export interface Profile {
@@ -45,6 +46,24 @@ export interface ProxyNode {
   group: string;
   selected: boolean;
   delay: number;
+}
+
+export interface ProxyGroup {
+  name: string;
+  type: string;
+  selected: string;
+  nodes: ProxyNode[];
+}
+
+export interface ProxySelection {
+  profileId: string;
+  groupName: string;
+  nodeName: string;
+  updatedAt: number;
+}
+
+export interface ProxySelectionState {
+  selections: ProxySelection[];
 }
 
 export interface ConfigValidationResult {

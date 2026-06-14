@@ -263,6 +263,24 @@ interface AppSettings {
 
 目标：节点页从“raw proxies 列表展示”升级为“代理组 + 当前选择 + 可选择”的控制面。
 
+状态：已完成（2026-06-14）。
+
+完成情况：
+
+- 新增 `ProxyGroup`、`ProxySelection`、`ProxySelectionState` 数据模型，并在 layout 中增加 `proxySelectionPath`。
+- `ConfigService` 已支持解析 `proxy-groups`、按 group 解析节点、读取内置 `DIRECT/REJECT` 节点、统计 rules 数量。
+- `selectLocalProxy(groupName, nodeName, profileId)` 已落地到 `mihomo/state/proxy-selections.json`，选择状态重启后保留。
+- 节点页已升级为代理组控制面：顶部 group tabs、节点搜索、当前 group 摘要、节点列表和点击选择。
+- 首页当前节点卡片和诊断面板已从当前 group/node 读取，不再写死 `Proxy`。
+- Profile chips/列表已展示当前配置规则数量。
+- `PocNative` 已增加 `selectProxy(group, node)` 类型定义占位；native/core 实时切换尚未实现，运行中选择节点会提示“重连后生效”，不会误报核心已切换。
+- 真机 `192.168.3.65:37805` 已完成最终 HAP 覆盖安装和冒烟验证：节点页显示 `Auto` group、搜索框、`28 / 28` 节点；选择 `爱沙尼亚-EE-1-流量倍率:0.2` 后，节点列表选中圆点、首页当前节点、诊断页 `Auto / 爱沙尼亚-EE-1-流量倍率:0.2` 同步更新。
+
+遗留到后续里程碑：
+
+- 目前选择节点仅维护 App 本地状态，尚未调用 mihomo core 的实时 selector API；接入 native bridge 后再把运行中选择升级为实时生效。
+- 原型中的手机 Bottom Sheet 和平板右侧独立节点面板尚未单独拆分，当前先复用完整节点页控制面完成闭环。
+
 范围：
 
 - 扩展数据模型：

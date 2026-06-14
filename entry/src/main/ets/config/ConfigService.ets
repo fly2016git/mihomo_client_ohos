@@ -8,8 +8,11 @@ import {
   LogLevel,
   MihomoLayout,
   Profile,
+  ProxyGroup,
   ProxyMode,
   ProxyNode,
+  ProxySelection,
+  ProxySelectionState,
   ProfilesState,
   SubscriptionMeta
 } from '../models/MvpTypes';
@@ -78,7 +81,8 @@ export class ConfigService {
       stateDir: baseDir + '/state',
       profilesPath: baseDir + '/state/profiles.json',
       runtimePath: baseDir + '/state/runtime.json',
-      settingsPath: baseDir + '/state/settings.json'
+      settingsPath: baseDir + '/state/settings.json',
+      proxySelectionPath: baseDir + '/state/proxy-selections.json'
     };
 
     this.ensureDir(layout.baseDir);
@@ -405,16 +409,65 @@ export class ConfigService {
   }
 
   listProxyNodes(profileId: string = ''): ProxyNode[] {
+    const groups = this.listProxyGroups(profileId);
+    if (groups.length === 0) {
+      return [];
+    }
+    return groups[0].nodes;
+  }
+
+  listProxyGroups(profileId: string = ''): ProxyGroup[] {
     const profile = profileId.length > 0 ? this.getProfile(profileId) : this.getActiveProfile();
     if (!profile) {
       return [];
     }
     const yaml = this.loadRawYaml(profile.id);
-    const nodes = this.extractProxyNodes(yaml, this.extractFirstProxyGroupName(yaml));
-    if (nodes.length > 0 && !nodes.some((node: ProxyNode) => node.selected)) {
-      nodes[0].selected = true;
+    const sourceNodes = this.extractProxyNodes(yaml, '');
+    const parsedGroups = this.extractProxyGroups(yaml);
+    if (parsedGroups.length === 0) {
+      return [this.buildProxyGroup(profile.id, 'Proxy', 'select', sourceNodes, [], '')];
     }
-    return nodes;
+    return parsedGroups.map((group: ProxyGroup) => {
+      return this.buildProxyGroup(profile.id, group.name, group.type, sourceNodes, group.nodes, group.selected);
+    });
+  }
+
+  selectLocalProxy(groupName: string, nodeName: string, profileId: string = ''): boolean {
+    const profile = profileId.length > 0 ? this.getProfile(profileId) : this.getActiveProfile();
+    if (!profile || groupName.length === 0 || nodeName.length === 0) {
+      return false;
+    }
+    const groups = this.listProxyGroups(profile.id);
+    let group: ProxyGroup | null = null;
+    for (const item of groups) {
+      if (item.name === groupName) {
+        group = item;
+        break;
+      }
+    }
+    if (!group || !group.nodes.some((node: ProxyNode) => node.name === nodeName)) {
+      return false;
+    }
+    const state = this.loadProxySelectionState();
+    const next: ProxySelection = {
+      profileId: profile.id,
+      groupName,
+      nodeName,
+      updatedAt: Date.now()
+    };
+    const rest = state.selections.filter((item: ProxySelection) => {
+      return item.profileId !== profile.id || item.groupName !== groupName;
+    });
+    this.saveProxySelectionState({ selections: rest.concat([next]) });
+    return true;
+  }
+
+  countRules(profileId: string = ''): number {
+    const profile = profileId.length > 0 ? this.getProfile(profileId) : this.getActiveProfile();
+    if (!profile) {
+      return 0;
+    }
+    return this.countRulesInYaml(this.loadRawYaml(profile.id));
   }
 
   pathExists(path: string): boolean {
@@ -679,6 +732,261 @@ export class ConfigService {
 
     this.pushProxyNode(nodes, current);
     return nodes;
+  }
+
+  private extractProxyGroups(yaml: string): ProxyGroup[] {
+    const groups: ProxyGroup[] = [];
+    const lines = yaml.split('\n');
+    let collecting = false;
+    let current: ProxyGroup | null = null;
+    let readingProxies = false;
+
+    for (const rawLine of lines) {
+      if (!collecting) {
+        const trimmed = rawLine.trim();
+        if (trimmed === 'proxy-groups:' || trimmed.startsWith('proxy-groups: ')) {
+          collecting = true;
+        }
+        continue;
+      }
+
+      if (this.isTopLevelContentLine(rawLine)) {
+        break;
+      }
+
+      const trimmed = rawLine.trim();
+      if (trimmed.length === 0 || trimmed.startsWith('#')) {
+        continue;
+      }
+
+      if (trimmed.startsWith('- ')) {
+        const item = trimmed.substring(2).trim();
+        if (readingProxies && current && item.indexOf(':') < 0 && !item.startsWith('{')) {
+          current.nodes.push(this.makeBuiltinProxyNode(this.cleanYamlScalar(item), current.name));
+          continue;
+        }
+
+        this.pushProxyGroup(groups, current);
+        current = {
+          name: '',
+          type: 'select',
+          selected: '',
+          nodes: []
+        };
+        readingProxies = false;
+        if (item.startsWith('{')) {
+          this.readInlineProxyGroup(item, current);
+        } else {
+          readingProxies = this.readProxyGroupField(item, current);
+        }
+        continue;
+      }
+
+      if (current) {
+        readingProxies = this.readProxyGroupField(trimmed, current) || readingProxies;
+      }
+    }
+
+    this.pushProxyGroup(groups, current);
+    return groups;
+  }
+
+  private readInlineProxyGroup(line: string, group: ProxyGroup): void {
+    group.name = this.extractInlineYamlValue(line, 'name') || group.name;
+    group.type = this.extractInlineYamlValue(line, 'type') || group.type;
+    const proxies = this.extractInlineArray(line, 'proxies');
+    for (const proxy of proxies) {
+      group.nodes.push(this.makeBuiltinProxyNode(proxy, group.name));
+    }
+  }
+
+  private readProxyGroupField(line: string, group: ProxyGroup): boolean {
+    const index = line.indexOf(':');
+    if (index <= 0) {
+      return false;
+    }
+    const key = line.substring(0, index).trim();
+    const rawValue = line.substring(index + 1).trim();
+    if (key === 'name') {
+      group.name = this.cleanYamlScalar(rawValue);
+      return false;
+    }
+    if (key === 'type') {
+      group.type = this.cleanYamlScalar(rawValue);
+      return false;
+    }
+    if (key === 'use' || key === 'proxies') {
+      const values = this.extractInlineArray(line, key);
+      for (const value of values) {
+        group.nodes.push(this.makeBuiltinProxyNode(value, group.name));
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private pushProxyGroup(groups: ProxyGroup[], group: ProxyGroup | null): void {
+    if (!group || group.name.length === 0) {
+      return;
+    }
+    groups.push({
+      name: group.name,
+      type: group.type.length > 0 ? group.type : 'select',
+      selected: group.selected,
+      nodes: group.nodes
+    });
+  }
+
+  private loadProxySelectionState(): ProxySelectionState {
+    const layout = this.ensureLayout();
+    if (!this.pathExists(layout.proxySelectionPath)) {
+      return { selections: [] };
+    }
+    try {
+      const parsed = JSON.parse(fs.readTextSync(layout.proxySelectionPath)) as ProxySelectionState;
+      return {
+        selections: parsed.selections ? parsed.selections : []
+      };
+    } catch (_) {
+      return { selections: [] };
+    }
+  }
+
+  private saveProxySelectionState(state: ProxySelectionState): void {
+    const layout = this.ensureLayout();
+    this.writeTextFileAtomic(layout.proxySelectionPath, JSON.stringify(state));
+  }
+
+  private getSelectedProxy(profileId: string, groupName: string): string {
+    const state = this.loadProxySelectionState();
+    for (const selection of state.selections) {
+      if (selection.profileId === profileId && selection.groupName === groupName) {
+        return selection.nodeName;
+      }
+    }
+    return '';
+  }
+
+  private countRulesInYaml(yaml: string): number {
+    const lines = yaml.split('\n');
+    let collecting = false;
+    let count = 0;
+    for (const rawLine of lines) {
+      if (!collecting) {
+        const trimmed = rawLine.trim();
+        if (trimmed === 'rules:' || trimmed.startsWith('rules: ')) {
+          collecting = true;
+          if (trimmed.startsWith('rules: [') && trimmed.indexOf(']') > trimmed.indexOf('[')) {
+            const inline = trimmed.substring(trimmed.indexOf('[') + 1, trimmed.indexOf(']')).trim();
+            return inline.length > 0 ? inline.split(',').length : 0;
+          }
+        }
+        continue;
+      }
+      if (this.isTopLevelContentLine(rawLine)) {
+        break;
+      }
+      const trimmed = rawLine.trim();
+      if (trimmed.startsWith('- ')) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private buildProxyGroup(profileId: string, groupName: string, groupType: string, sourceNodes: ProxyNode[],
+    declaredNodes: ProxyNode[], yamlSelected: string): ProxyGroup {
+    const selection = this.getSelectedProxy(profileId, groupName);
+    const nodes = this.resolveGroupNodes(groupName, sourceNodes, declaredNodes, yamlSelected);
+    const selected = selection.length > 0 && nodes.some((node: ProxyNode) => node.name === selection) ?
+      selection : (yamlSelected.length > 0 ? yamlSelected : (nodes.length > 0 ? nodes[0].name : ''));
+    const nextNodes = nodes.map((node: ProxyNode) => {
+      const next: ProxyNode = {
+        name: node.name,
+        type: node.type,
+        server: node.server,
+        port: node.port,
+        group: groupName,
+        selected: node.name === selected,
+        delay: node.delay
+      };
+      return next;
+    });
+    return {
+      name: groupName,
+      type: groupType.length > 0 ? groupType : 'select',
+      selected,
+      nodes: nextNodes
+    };
+  }
+
+  private resolveGroupNodes(groupName: string, sourceNodes: ProxyNode[], declaredNodes: ProxyNode[],
+    yamlSelected: string): ProxyNode[] {
+    let declaredNames: string[] = declaredNodes.map((node: ProxyNode) => node.name);
+    if (declaredNames.length === 0) {
+      declaredNames = sourceNodes.map((node: ProxyNode) => node.name);
+    }
+    if (yamlSelected.length > 0 && declaredNames.indexOf(yamlSelected) < 0) {
+      declaredNames = [yamlSelected].concat(declaredNames);
+    }
+    const resolved: ProxyNode[] = [];
+    for (const name of declaredNames) {
+      const source = this.findProxyNode(sourceNodes, name);
+      if (source) {
+        resolved.push({
+          name: source.name,
+          type: source.type,
+          server: source.server,
+          port: source.port,
+          group: groupName,
+          selected: false,
+          delay: source.delay
+        });
+      } else {
+        resolved.push(this.makeBuiltinProxyNode(name, groupName));
+      }
+    }
+    return resolved;
+  }
+
+  private findProxyNode(nodes: ProxyNode[], name: string): ProxyNode | null {
+    for (const node of nodes) {
+      if (node.name === name) {
+        return node;
+      }
+    }
+    return null;
+  }
+
+  private makeBuiltinProxyNode(name: string, groupName: string): ProxyNode {
+    const upper = name.toUpperCase();
+    return {
+      name,
+      type: upper === 'DIRECT' || upper === 'REJECT' ? 'builtin' : 'proxy',
+      server: upper === 'DIRECT' || upper === 'REJECT' ? upper : '',
+      port: '',
+      group: groupName,
+      selected: false,
+      delay: 0
+    };
+  }
+
+  private extractInlineArray(line: string, key: string): string[] {
+    const marker = key + ':';
+    const index = line.indexOf(marker);
+    if (index < 0) {
+      return [];
+    }
+    const after = line.substring(index + marker.length);
+    const start = after.indexOf('[');
+    const end = after.indexOf(']');
+    if (start < 0 || end <= start) {
+      return [];
+    }
+    return after.substring(start + 1, end)
+      .split(',')
+      .map((item: string) => this.cleanYamlScalar(item))
+      .filter((item: string) => item.length > 0);
   }
 
   private readProxyField(line: string, node: ProxyNode): void {

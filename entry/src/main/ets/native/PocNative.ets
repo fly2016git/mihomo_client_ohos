@@ -35,6 +35,9 @@ interface PocNativeApi {
   disableProtectHook(): Promise<PocStatus>;
   isMihomoRunning(): PocStatus;
   gracefulStopMihomo(): Promise<PocStatus>;
+
+  // M2-3 placeholder: native bridge is not implemented yet.
+  selectProxy(group: string, node: string): Promise<PocStatus>;
 }
 
 export default pocNative as PocNativeApi;
