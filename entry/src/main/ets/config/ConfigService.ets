@@ -85,7 +85,9 @@ export class ConfigService {
       runtimePath: baseDir + '/state/runtime.json',
       settingsPath: baseDir + '/state/settings.json',
       proxySelectionPath: baseDir + '/state/proxy-selections.json',
-      proxyLatencyPath: baseDir + '/state/proxy-latency.json'
+      proxyLatencyPath: baseDir + '/state/proxy-latency.json',
+      trafficDailyPath: baseDir + '/state/traffic-daily.json',
+      trafficStatsPath: baseDir + '/state/traffic-stats.json'
     };
 
     this.ensureDir(layout.baseDir);

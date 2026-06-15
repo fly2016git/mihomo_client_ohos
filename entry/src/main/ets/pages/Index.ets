@@ -16,11 +16,13 @@ import {
   RuntimeEvent,
   RuntimeEventLevel,
   RuntimeSnapshot,
+  TrafficStatsSource,
   VpnRouteMode
 } from '../models/MvpTypes';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
+import { UiRefreshBus } from '../runtime/UiRefreshBus';
 import { VpnControlService } from '../runtime/VpnControlService';
 
 const DOMAIN = 0x0001;
@@ -46,6 +48,11 @@ struct Index {
   @State selectedSectionIndex: number = 0;
   @State uploadSpeed: number = 0;
   @State downloadSpeed: number = 0;
+  @State todayUploadBytes: number = 0;
+  @State todayDownloadBytes: number = 0;
+  @State trafficSource: TrafficStatsSource = 'none';
+  @StorageLink('runtimeRefreshSignal') @Watch('onRuntimeRefreshSignalChanged')
+  runtimeRefreshSignal: number = 0;
   @State nodes: ProxyNode[] = [];
   @State proxyGroups: ProxyGroup[] = [];
   @State selectedProxyGroupName: string = '';
@@ -64,40 +71,121 @@ struct Index {
   @State logFollow: boolean = true;
   @State diagnosticText: string = '';
   @State lastDiagnosticPath: string = '';
+  @State renderTick: number = 0;
 
   private configService?: ConfigService;
   private runtimeStore?: RuntimeStore;
   private vpnControlService?: VpnControlService;
   private subscriptionService?: SubscriptionService;
   private settingsService?: SettingsService;
+  private uiContext?: common.UIAbilityContext;
+  private runtimeRefreshHandler?: () => void;
+  private runtimeRefreshBusHandler?: (timestamp: number) => void;
   private logsScroller: Scroller = new Scroller();
   private pollTimer: number = -1;
+  private profileRefreshTick: number = 0;
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
+    this.uiContext = context;
     const filesDir = context.filesDir;
     this.configService = new ConfigService(filesDir);
     this.runtimeStore = new RuntimeStore(filesDir);
     this.vpnControlService = new VpnControlService(filesDir, context);
     this.subscriptionService = new SubscriptionService(filesDir);
     this.settingsService = new SettingsService(filesDir);
+    this.bindRuntimeRefreshEvent(context);
+    this.bindRuntimeRefreshBus();
     const profile = this.configService.ensureDefaultProfile();
     this.activeProfileId = profile.id;
     this.rawYaml = this.configService.loadRawYaml(profile.id);
     this.loadSettings();
     this.reloadProfiles();
     this.markRestoredRuntimeUnknown();
-    this.refreshState();
-    this.pollTimer = setInterval(() => {
-      this.refreshState();
-    }, 1200);
+    this.refreshState(true);
+    this.startRuntimePolling();
   }
 
   aboutToDisappear(): void {
+    this.unbindRuntimeRefreshEvent();
+    this.unbindRuntimeRefreshBus();
+    this.stopRuntimePolling();
+  }
+
+  onPageShow(): void {
+    this.refreshRuntimeView(true);
+    this.startRuntimePolling();
+  }
+
+  onPageHide(): void {
+    // Keep the lightweight runtime poller alive while the page is hidden. On
+    // real devices page-show callbacks are not always paired with every app
+    // foreground transition, so stopping here can leave traffic tiles stale
+    // after returning from another app.
+  }
+
+  onRuntimeRefreshSignalChanged(): void {
+    this.refreshRuntimeView(true);
+    this.startRuntimePolling();
+  }
+
+  private bindRuntimeRefreshEvent(context: common.UIAbilityContext): void {
+    if (this.runtimeRefreshHandler) {
+      return;
+    }
+    this.runtimeRefreshHandler = () => {
+      this.refreshRuntimeView(true);
+      this.startRuntimePolling();
+    };
+    context.eventHub.on('runtimeRefresh', this.runtimeRefreshHandler);
+  }
+
+  private unbindRuntimeRefreshEvent(): void {
+    if (!this.uiContext || !this.runtimeRefreshHandler) {
+      return;
+    }
+    this.uiContext.eventHub.off('runtimeRefresh', this.runtimeRefreshHandler);
+    this.runtimeRefreshHandler = undefined;
+  }
+
+  private bindRuntimeRefreshBus(): void {
+    if (this.runtimeRefreshBusHandler) {
+      return;
+    }
+    this.runtimeRefreshBusHandler = (_timestamp: number) => {
+      this.refreshRuntimeView(true);
+      this.startRuntimePolling();
+    };
+    UiRefreshBus.add(this.runtimeRefreshBusHandler);
+  }
+
+  private unbindRuntimeRefreshBus(): void {
+    if (!this.runtimeRefreshBusHandler) {
+      return;
+    }
+    UiRefreshBus.remove(this.runtimeRefreshBusHandler);
+    this.runtimeRefreshBusHandler = undefined;
+  }
+
+  private startRuntimePolling(): void {
+    if (this.pollTimer >= 0) {
+      return;
+    }
+    this.pollTimer = setInterval(() => {
+      this.refreshState(false);
+    }, 1000);
+  }
+
+  private stopRuntimePolling(): void {
     if (this.pollTimer >= 0) {
       clearInterval(this.pollTimer);
       this.pollTimer = -1;
     }
+  }
+
+  private refreshRuntimeView(forceProfiles: boolean = false): void {
+    this.refreshState(forceProfiles);
+    this.renderTick = (this.renderTick + 1) % 1000000;
   }
 
   private reloadProfiles(): void {
@@ -157,7 +245,7 @@ struct Index {
       this.configService.generateRuntimeYaml(rawYaml, this.appSettings));
   }
 
-  private refreshState(): void {
+  private refreshState(forceProfiles: boolean = false): void {
     if (!this.runtimeStore || !this.configService) {
       return;
     }
@@ -166,7 +254,11 @@ struct Index {
       this.applySnapshot(snapshot);
       this.events = this.runtimeStore.getEvents();
       this.runtimeEvents = this.runtimeStore.getRuntimeEvents();
-      this.reloadProfiles();
+      this.profileRefreshTick++;
+      if (forceProfiles || this.profileRefreshTick >= 6) {
+        this.profileRefreshTick = 0;
+        this.reloadProfiles();
+      }
       if (this.selectedSectionIndex === 4 && this.logFollow) {
         this.logsScroller.scrollEdge(Edge.Top);
       }
@@ -181,6 +273,9 @@ struct Index {
       return;
     }
     const snapshot = this.runtimeStore.getSnapshot();
+    if (Date.now() - snapshot.updatedAt < 30000) {
+      return;
+    }
     if (snapshot.runtimeState === 'connected' || snapshot.runtimeState === 'starting' ||
       snapshot.runtimeState === 'stopping') {
       this.runtimeStore.update({
@@ -200,6 +295,9 @@ struct Index {
     this.lastError = snapshot.lastError;
     this.uploadSpeed = snapshot.uploadSpeed;
     this.downloadSpeed = snapshot.downloadSpeed;
+    this.todayUploadBytes = snapshot.todayUploadBytes;
+    this.todayDownloadBytes = snapshot.todayDownloadBytes;
+    this.trafficSource = snapshot.trafficSource;
     if (this.lastError.length === 0 && snapshot.lastEvent.length > 0) {
       this.validationText = snapshot.lastEvent;
     }
@@ -391,6 +489,16 @@ struct Index {
       return mib.toFixed(1) + ' MiB';
     }
     return (mib / 1024).toFixed(1) + ' GiB';
+  }
+
+  private trafficSourceLabel(): string {
+    if (this.trafficSource === 'native-mihomo') {
+      return 'mihomo';
+    }
+    if (this.trafficSource === 'tun-interface') {
+      return 'TUN';
+    }
+    return '未采样';
   }
 
   private profileTypeLabel(profile: Profile): string {
@@ -1419,8 +1527,9 @@ struct Index {
 
   @Builder TrafficRow() {
     Row({ space: 10 }) {
-      this.TrafficTile('下载', this.formatBytes(this.downloadSpeed) + '/s')
-      this.TrafficTile('上传', this.formatBytes(this.uploadSpeed) + '/s')
+      this.TrafficTile('下载 · ' + this.trafficSourceLabel(), this.formatBytes(this.downloadSpeed) + '/s')
+      this.TrafficTile('上传 · ' + this.trafficSourceLabel(), this.formatBytes(this.uploadSpeed) + '/s')
+      this.TrafficTile('今日', this.formatBytes(this.todayDownloadBytes + this.todayUploadBytes))
     }
     .width('100%')
   }
@@ -1430,11 +1539,14 @@ struct Index {
       Text(label)
         .fontSize(11)
         .fontColor(this.mutedText())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
       Text(value)
-        .fontSize(17)
+        .fontSize(15)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.accentColor())
         .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .alignItems(HorizontalAlign.Start)
     .layoutWeight(1)
@@ -2496,6 +2608,9 @@ struct Index {
         this.DiagCard('Active Profile', this.activeProfileName, this.activeProfileId)
         this.DiagCard('当前节点', this.selectedProxyGroupLabel() + ' / ' + this.selectedNodeName(), this.selectedNodeMeta())
         this.DiagCard('Bridge', 'tunFd: ' + this.tunFdText(), 'protect hook: ' + this.protectHookText())
+        this.DiagCard('流量统计', 'source=' + this.trafficSourceLabel() + ' · down=' +
+          this.formatBytes(this.downloadSpeed) + '/s · up=' + this.formatBytes(this.uploadSpeed) + '/s',
+          'today=' + this.formatBytes(this.todayDownloadBytes + this.todayUploadBytes))
         this.DiagCard('设置', 'route=' + this.appSettings.routeMode + ' · mode=' + this.appSettings.proxyMode,
           'dns=' + this.appSettings.dnsMode + ' · log=' + this.appSettings.logLevel)
         this.DiagCard('最近错误', this.lastError.length > 0 ? this.lastError : '无',
@@ -2747,6 +2862,15 @@ struct Index {
     .backgroundColor(this.appBg())
     .onAreaChange((_oldArea, newArea) => {
       this.rootWidth = Number(newArea.width);
+    })
+    .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, _currentRatio: number) => {
+      if (!isVisible) {
+        return;
+      }
+      this.refreshRuntimeView(true);
+      setTimeout(() => {
+        this.refreshRuntimeView(true);
+      }, 500);
     })
   }
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/listener"
 	"github.com/metacubex/mihomo/tunnel"
+	"github.com/metacubex/mihomo/tunnel/statistic"
 	"gopkg.in/yaml.v3"
 )
 
@@ -85,6 +86,25 @@ type delayResult struct {
 	Error     string      `json:"error"`
 }
 
+type trafficStatsResult struct {
+	OK        bool   `json:"ok"`
+	Source    string `json:"source"`
+	Up        int64  `json:"up"`
+	Down      int64  `json:"down"`
+	UpTotal   int64  `json:"upTotal"`
+	DownTotal int64  `json:"downTotal"`
+	Running   bool   `json:"running"`
+	UpdatedAt int64  `json:"updatedAt"`
+	Error     string `json:"error"`
+}
+
+var (
+	trafficStatsMu   sync.Mutex
+	trafficStatsPath string
+	trafficStatsStop chan struct{}
+	trafficStatsDone chan struct{}
+)
+
 func setLastErr(err error) C.int {
 	if err != nil {
 		lastErrText = err.Error()
@@ -104,6 +124,108 @@ func delayResultCString(result delayResult) *C.char {
 		return C.CString(fmt.Sprintf(`{"ok":false,"error":"marshal delay result failed: %s"}`, err.Error()))
 	}
 	return C.CString(string(data))
+}
+
+func trafficStatsCString(result trafficStatsResult) *C.char {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return C.CString(fmt.Sprintf(`{"ok":false,"source":"native-mihomo","error":"marshal traffic stats failed: %s"}`, err.Error()))
+	}
+	return C.CString(string(data))
+}
+
+func currentTrafficStatsResult() trafficStatsResult {
+	running := mihomoStartedSnapshot()
+	up, down := statistic.DefaultManager.Now()
+	upTotal, downTotal := statistic.DefaultManager.Total()
+	result := trafficStatsResult{
+		OK:        running,
+		Source:    "native-mihomo",
+		Up:        up,
+		Down:      down,
+		UpTotal:   upTotal,
+		DownTotal: downTotal,
+		Running:   running,
+		UpdatedAt: time.Now().UnixMilli(),
+	}
+	if !running {
+		result.Error = "mihomo not running"
+	}
+	return result
+}
+
+func writeTrafficStatsFile(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty traffic stats path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.Marshal(currentTrafficStatsResult())
+	if err != nil {
+		return err
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func stopTrafficStatsWriter() {
+	trafficStatsMu.Lock()
+	stop := trafficStatsStop
+	done := trafficStatsDone
+	trafficStatsStop = nil
+	trafficStatsDone = nil
+	trafficStatsPath = ""
+	trafficStatsMu.Unlock()
+
+	if stop == nil {
+		return
+	}
+	close(stop)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		bridgeLog("traffic stats writer stop timeout")
+	}
+}
+
+func startTrafficStatsWriter(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty traffic stats path")
+	}
+	stopTrafficStatsWriter()
+	if err := writeTrafficStatsFile(path); err != nil {
+		return err
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	trafficStatsMu.Lock()
+	trafficStatsPath = path
+	trafficStatsStop = stop
+	trafficStatsDone = done
+	trafficStatsMu.Unlock()
+
+	go func(statsPath string, stopCh <-chan struct{}, doneCh chan<- struct{}) {
+		defer close(doneCh)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := writeTrafficStatsFile(statsPath); err != nil {
+					bridgeLog("traffic stats writer failed: " + err.Error())
+				}
+			case <-stopCh:
+				_ = writeTrafficStatsFile(statsPath)
+				return
+			}
+		}
+	}(path, stop, done)
+	return nil
 }
 
 func normalizeDelayURL(raw string) string {
@@ -135,6 +257,12 @@ func getExpectedDelayStatus() utils.IntRanges[uint16] {
 }
 
 func mihomoIsStarted() bool {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return started
+}
+
+func mihomoStartedSnapshot() bool {
 	stateMu.Lock()
 	defer stateMu.Unlock()
 	return started
@@ -475,6 +603,7 @@ func MihomoOhosStartConfigFileWithTunFd(homeDir *C.char, configPath *C.char, tun
 
 //export MihomoOhosStop
 func MihomoOhosStop() C.int {
+	stopTrafficStatsWriter()
 	stateMu.Lock()
 	protectOn = false
 	dialer.DefaultSocketHook = nil
@@ -501,6 +630,7 @@ func MihomoOhosStop() C.int {
 //
 //export MihomoOhosGracefulStop
 func MihomoOhosGracefulStop() C.int {
+	stopTrafficStatsWriter()
 	stateMu.Lock()
 	if !started {
 		stateMu.Unlock()
@@ -645,6 +775,35 @@ func MihomoOhosGroupDelay(groupName *C.char, testURL *C.char, timeoutMs C.int) *
 		result.Error = "no proxy delay result"
 	}
 	return delayResultCString(result)
+}
+
+//export MihomoOhosTrafficStats
+func MihomoOhosTrafficStats() *C.char {
+	return trafficStatsCString(currentTrafficStatsResult())
+}
+
+//export MihomoOhosStartTrafficStatsWriter
+func MihomoOhosStartTrafficStatsWriter(statsPath *C.char) C.int {
+	if statsPath == nil {
+		stateMu.Lock()
+		lastErrText = "empty traffic stats path"
+		stateMu.Unlock()
+		return -1
+	}
+	path := C.GoString(statsPath)
+	if err := startTrafficStatsWriter(path); err != nil {
+		stateMu.Lock()
+		code := setLastErr(err)
+		stateMu.Unlock()
+		return code
+	}
+	return 0
+}
+
+//export MihomoOhosStopTrafficStatsWriter
+func MihomoOhosStopTrafficStatsWriter() C.int {
+	stopTrafficStatsWriter()
+	return 0
 }
 
 //export MihomoOhosLastError

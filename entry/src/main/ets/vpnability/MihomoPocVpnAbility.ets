@@ -4,6 +4,7 @@ import { connection, VpnExtensionAbility, vpnExtension } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConfigService } from '../config/ConfigService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
+import { TrafficStatsService } from '../runtime/TrafficStatsService';
 import { Profile, ProxyLatencyRecord, ProxyLatencyState } from '../models/MvpTypes';
 import { SettingsService } from '../settings/SettingsService';
 import pocNative, { PocStatus } from '../native/PocNative';
@@ -243,6 +244,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   private poc06State: Poc06State = 'idle';
   private startInProgress: boolean = false;
   private destroyInProgress: boolean = false;
+  private trafficStatsService?: TrafficStatsService;
+  private trafficTimer: number = -1;
+  private trafficStatsFailed: boolean = false;
+  private trafficSampleInFlight: boolean = false;
   private poc04Started: boolean = false;
   private mihomoStartedBy: string = '';
   private poc03Options: Poc03Options = {
@@ -422,6 +427,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         lastEvent: 'Connected'
       });
       store.appendEvent('Connected profile=' + profile.name);
+      await this.startTrafficPolling(store);
     } catch (err) {
       const errorText = this.toErrorText(err);
       this.setPoc06State('error', 'product connect failed ' + errorText);
@@ -436,6 +442,63 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     } finally {
       this.startInProgress = false;
     }
+  }
+
+  private async startTrafficPolling(store: RuntimeStore): Promise<void> {
+    this.stopTrafficPolling(false);
+    const layout = new ConfigService(this.context.filesDir).ensureLayout();
+    store.appendEvent('Traffic stats writer starting', 'info', 'vpn');
+    const writerStatus = await pocNative.startMihomoTrafficStatsWriter(layout.trafficStatsPath);
+    if (!writerStatus.ok) {
+      store.appendEvent('Traffic stats writer failed: ' + writerStatus.message, 'warn', 'vpn');
+      return;
+    }
+    await this.sleep(300);
+    this.trafficStatsService = new TrafficStatsService(this.context.filesDir);
+    this.trafficStatsFailed = false;
+    this.trafficSampleInFlight = false;
+    try {
+      await this.trafficStatsService.resetBaseline();
+      store.appendEvent('Traffic stats source=native-mihomo', 'info', 'vpn');
+    } catch (err) {
+      this.trafficStatsFailed = true;
+      store.appendEvent('Traffic stats unavailable: ' + this.toErrorText(err), 'warn', 'vpn');
+      return;
+    }
+
+    this.trafficTimer = setInterval(async () => {
+      if (!this.trafficStatsService || this.trafficSampleInFlight) {
+        return;
+      }
+      this.trafficSampleInFlight = true;
+      try {
+        await this.trafficStatsService.sampleAndUpdate();
+      } catch (err) {
+        if (!this.trafficStatsFailed) {
+          this.trafficStatsFailed = true;
+          new RuntimeStore(this.context.filesDir).appendEvent('Traffic stats stopped: ' + this.toErrorText(err),
+            'warn', 'vpn');
+        }
+        this.stopTrafficPolling(true);
+      } finally {
+        this.trafficSampleInFlight = false;
+      }
+    }, 1000);
+  }
+
+  private stopTrafficPolling(updateRuntime: boolean): void {
+    if (this.trafficTimer >= 0) {
+      clearInterval(this.trafficTimer);
+      this.trafficTimer = -1;
+    }
+    this.trafficSampleInFlight = false;
+    if (updateRuntime && this.trafficStatsService) {
+      try {
+        this.trafficStatsService.stopAndKeepDaily();
+      } catch (_) {
+      }
+    }
+    this.trafficStatsService = undefined;
   }
 
   private ensureProductRuntimeReady(configService: ConfigService, profile: Profile): void {
@@ -600,11 +663,14 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       // Brief cooldown before destroying VPN/TUN fd
       await this.sleep(500);
 
+      this.stopTrafficPolling(true);
       await this.destroyVpn();
       store.update({
         runtimeState: 'idle',
         coreState: 'stopped',
         tunFd: -1,
+        uploadSpeed: 0,
+        downloadSpeed: 0,
         lastError: '',
         lastEvent: 'Disconnected'
       });
@@ -1530,6 +1596,8 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.poc04Started = false;
       this.mihomoStartedBy = '';
     }
+
+    this.stopTrafficPolling(true);
 
     // POC-03: Stop TUN reader first
     this.stopTunReader();

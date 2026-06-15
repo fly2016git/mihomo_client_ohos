@@ -384,6 +384,37 @@ interface RuntimeEvent {
 
 目标：把“已连接”从状态展示推进到可重复验证的真实网络访问。
 
+状态：已完成（2026-06-15）。
+
+已完成：
+
+- 流量统计来源已收敛为 `native-mihomo`：Go bridge 在 mihomo 进程内通过 `statistic.DefaultManager.Now()/Total()` 采样，避免 ArkTS 定时跨 NAPI/cgo 调用。
+- 新增 native stats writer：连接成功后启动 `MihomoOhosStartTrafficStatsWriter(statsPath)`，每秒写入 `mihomo/state/traffic-stats.json`；`MihomoOhosStop/GracefulStop` 会停止 writer。
+- ArkTS `TrafficStatsService` 改为读取 stats 文件并更新 Runtime，不再周期调用 `getMihomoTrafficStats()`。
+- `RuntimeSnapshot` 已接入 `todayUploadBytes`、`todayDownloadBytes`、`trafficSource`，首页和诊断页展示实时速度、今日流量和统计来源。
+- 新增 `mihomo/state/traffic-daily.json`，按本地日期累计并在断开后保留今日流量。
+- `scripts/run_mvp01_browser_verify.sh` 已补充 runtime 流量字段、`vpn-tun` RX/TX delta、smoke summary 写入和 crash signal 统计。
+
+验证：
+
+- `bash scripts/build_poc04_mihomo_core.sh` 通过，确认导出 `MihomoOhosStartTrafficStatsWriter` / `MihomoOhosStopTrafficStatsWriter`。
+- `bash -n scripts/run_mvp01_browser_verify.sh` 通过。
+- `git diff --check` 通过。
+- `hvigorw --no-daemon --mode module -p module=entry assembleHap` 通过。
+- 已安装到真机 `192.168.3.65:37805`，使用 profile `sub-mq879w08-7ib` 发起真实连接。
+- 真机连接验证：`runtimeState=connected`、`coreState=running`、`trafficSource=native-mihomo`，并生成 `traffic-stats.json`：
+  `{"ok":true,"source":"native-mihomo","running":true,...}`。
+- 浏览器真实 smoke：访问 `https://httpbin.org/get` 后，`vpn-tun` 从 `RX bytes=267951 / TX bytes=56391` 增加到 `RX bytes=336158 / TX bytes=96628`，增量 `RX +68207`、`TX +40237`。
+- Runtime 今日累计从 `277088` 字节增加到 `363424` 字节，`traffic-daily.json` 持久化为 `uploadBytes=68046`、`downloadBytes=295378`。
+- 断开验证：`runtimeState=idle`、`coreState=stopped`、速度清零，今日累计保留为 `uploadBytes=68046`、`downloadBytes=295455`。
+- 连接、浏览器 smoke、断开阶段均未发现 `DfxFaultLogger` 崩溃信号。
+
+遗留到后续里程碑：
+
+- 首页实时速度依赖 mihomo 当前采样窗口，低流量或请求结束后会回到 0；后续可在 UI 上增加最近峰值或短时平滑。
+- `run_mvp01_browser_verify.sh` 的 UI 坐标点击仍受布局影响，当前真机 smoke 已用 command-driven connect/disconnect 验证，脚本后续可改为优先使用 `mvpCommand`。
+- 路由模式矩阵的完整 smoke（`blocking-default`、`split-default`、`no-routes`、`exclude-local`）进入后续回归批处理。
+
 范围：
 
 - 明确流量统计来源：

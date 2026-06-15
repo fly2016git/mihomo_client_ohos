@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { ConfigService } from '../config/ConfigService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
+import { UiRefreshBus } from '../runtime/UiRefreshBus';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { Profile, SubscriptionUpdateResult } from '../models/MvpTypes';
 
@@ -41,6 +42,9 @@ interface MvpCommandParams extends Record<string, Object> {
 }
 
 export default class EntryAbility extends UIAbility {
+  private windowStage?: window.WindowStage;
+  private lastContentReloadAt: number = 0;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -48,12 +52,14 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     hilog.info(DOMAIN, TAG, 'Ability onCreate want=%{public}s', this.wantToLogText(want));
+    this.notifyUiRuntimeRefresh('onCreate');
     this.tryHandleMvpCommand(want, 'onCreate');
     this.tryStartVpnPocFromWant(want, 'onCreate');
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(DOMAIN, TAG, 'Ability onNewWant want=%{public}s', this.wantToLogText(want));
+    this.notifyUiRuntimeRefresh('onNewWant');
     this.tryHandleMvpCommand(want, 'onNewWant');
     this.tryStartVpnPocFromWant(want, 'onNewWant');
   }
@@ -65,29 +71,64 @@ export default class EntryAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageCreate');
+    this.windowStage = windowStage;
 
-    windowStage.loadContent('pages/Index', (err) => {
-      if (err.code) {
-        hilog.error(DOMAIN, TAG, 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
-        return;
-      }
-      hilog.info(DOMAIN, TAG, 'Succeeded in loading the content.');
-    });
+    this.loadMainContent('onWindowStageCreate');
   }
 
   onWindowStageDestroy(): void {
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageDestroy');
+    this.windowStage = undefined;
   }
 
   onForeground(): void {
     // Ability has brought to foreground
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onForeground');
+    this.notifyUiRuntimeRefresh('onForeground');
+    this.reloadMainContentSoon('onForeground');
   }
 
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onBackground');
+  }
+
+  private notifyUiRuntimeRefresh(source: string): void {
+    try {
+      UiRefreshBus.emit();
+      this.context.eventHub.emit('runtimeRefresh', Date.now());
+      AppStorage.SetOrCreate('runtimeRefreshSignal', Date.now());
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, 'notifyUiRuntimeRefresh failed source=%{public}s err=%{public}s',
+        source, JSON.stringify(err));
+    }
+  }
+
+  private reloadMainContentSoon(source: string): void {
+    const now = Date.now();
+    if (now - this.lastContentReloadAt < 1000) {
+      return;
+    }
+    this.lastContentReloadAt = now;
+    setTimeout(() => {
+      this.loadMainContent(source);
+    }, 150);
+  }
+
+  private loadMainContent(source: string): void {
+    if (!this.windowStage) {
+      return;
+    }
+    this.windowStage.loadContent('pages/Index', (err) => {
+      if (err.code) {
+        hilog.error(DOMAIN, TAG, 'Failed to load content source=%{public}s cause=%{public}s',
+          source, JSON.stringify(err));
+        return;
+      }
+      hilog.info(DOMAIN, TAG, 'Succeeded loading content source=%{public}s', source);
+      this.notifyUiRuntimeRefresh('loadContent:' + source);
+    });
   }
 
   private tryStartVpnPocFromWant(want: Want, source: string): void {

@@ -8,6 +8,7 @@ export type DnsMode = 'default' | 'fake-ip' | 'redir-host';
 export type LogLevel = 'debug' | 'info' | 'warning' | 'error';
 export type RuntimeEventLevel = 'debug' | 'info' | 'warn' | 'error';
 export type RuntimeEventSource = 'ui' | 'vpn' | 'core' | 'subscription' | 'config' | 'diagnostic';
+export type TrafficStatsSource = 'none' | 'tun-interface' | 'native-mihomo';
 
 export interface MihomoLayout {
   baseDir: string;
@@ -23,6 +24,8 @@ export interface MihomoLayout {
   settingsPath: string;
   proxySelectionPath: string;
   proxyLatencyPath: string;
+  trafficDailyPath: string;
+  trafficStatsPath: string;
 }
 
 export interface Profile {
@@ -106,6 +109,9 @@ export interface RuntimeSnapshot {
   lastEvent: string;
   uploadSpeed: number;
   downloadSpeed: number;
+  todayUploadBytes: number;
+  todayDownloadBytes: number;
+  trafficSource: TrafficStatsSource;
 }
 
 export interface RuntimeEvent {

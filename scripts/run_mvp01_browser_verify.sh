@@ -13,11 +13,67 @@ DEVICE_LAYOUT_DIR="${MVP_DEVICE_LAYOUT_DIR:-/data/local/tmp}"
 TARGET_URL="${MVP_BROWSER_URL:-https://httpbin.org/get}"
 APP_LOG_FILTER='MihomoMvpPage|MihomoPocEntry|MihomoPocVpn|MihomoPocNapi|DfxFaultLogger|Ability on scheduler died|On ability died|\[TUN\]|\[DNS\]'
 BROWSER_LOG_FILTER='com.huawei.hmos.browser|NetConnManager|NETSTACK_RCP|ERR_NAME_NOT_RESOLVED|vpnEnabled|tryDns|FinalUrlRequestOccursError|HttpDNSResult'
+APP_LOG_DIR="/data/app/el2/100/base/$POC_BUNDLE_NAME/haps/entry/files/mihomo/logs"
+APP_RUNTIME_PATH="/data/app/el2/100/base/$POC_BUNDLE_NAME/haps/entry/files/mihomo/state/runtime.json"
 
 mkdir -p "$TMP_DIR"
 
 run_hdc() {
   "$HDC" -t "$POC_DEVICE_TARGET" "$@"
+}
+
+ifconfig_bytes() {
+  local file="$1"
+  local direction="$2"
+  awk -v direction="$direction" '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == direction && (i + 1) <= NF && $(i + 1) ~ /^bytes:/) {
+          split($(i + 1), parts, ":")
+          print parts[2]
+          found = 1
+          exit
+        }
+      }
+    }
+    END {
+      if (!found) {
+        print 0
+      }
+    }
+  ' "$file"
+}
+
+count_lines() {
+  local pattern="$1"
+  local file="$2"
+  if [ ! -f "$file" ]; then
+    echo 0
+    return
+  fi
+  grep -E "$pattern" "$file" | wc -l | tr -d ' '
+}
+
+runtime_field() {
+  local file="$1"
+  local field="$2"
+  if [ ! -f "$file" ]; then
+    echo ""
+    return
+  fi
+  python3 - "$file" "$field" <<'PY'
+import json
+import sys
+
+path, field = sys.argv[1], sys.argv[2]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    value = data.get("snapshot", {}).get(field, "")
+    print(value)
+except Exception:
+    print("")
+PY
 }
 
 dump_layout() {
@@ -108,6 +164,7 @@ cat "$TMP_DIR/ifconfig-after.txt"
 
 run_hdc shell hilog -x | grep -E "$APP_LOG_FILTER" > "$TMP_DIR/hilog-app-browser.txt" || true
 run_hdc shell hilog -x | grep -E "$BROWSER_LOG_FILTER" > "$TMP_DIR/hilog-browser.txt" || true
+run_hdc shell cat "$APP_RUNTIME_PATH" > "$TMP_DIR/runtime-after-browser.json" || true
 
 echo "== key app logs =="
 grep -E 'MVP-01B|\[TUN\]|\[DNS\]|protect|DfxFaultLogger|Ability on scheduler died|On ability died' "$TMP_DIR/hilog-connect.txt" "$TMP_DIR/hilog-app-browser.txt" || true
@@ -115,5 +172,44 @@ grep -E 'MVP-01B|\[TUN\]|\[DNS\]|protect|DfxFaultLogger|Ability on scheduler die
 echo "== key browser logs =="
 grep -E 'vpnEnabled|tryDns|ERR_NAME_NOT_RESOLVED|FinalUrlRequestOccursError|HttpDNSResult|vpn-tun' "$TMP_DIR/hilog-browser.txt" || true
 
-echo "MVP-01 browser verify DONE"
+RX_BEFORE=$(ifconfig_bytes "$TMP_DIR/ifconfig-before.txt" RX)
+RX_AFTER=$(ifconfig_bytes "$TMP_DIR/ifconfig-after.txt" RX)
+TX_BEFORE=$(ifconfig_bytes "$TMP_DIR/ifconfig-before.txt" TX)
+TX_AFTER=$(ifconfig_bytes "$TMP_DIR/ifconfig-after.txt" TX)
+RX_DELTA=$((RX_AFTER - RX_BEFORE))
+TX_DELTA=$((TX_AFTER - TX_BEFORE))
+if [ "$RX_DELTA" -lt 0 ]; then RX_DELTA=0; fi
+if [ "$TX_DELTA" -lt 0 ]; then TX_DELTA=0; fi
+
+BROWSER_ERRORS=$(count_lines 'ERR_NAME_NOT_RESOLVED|dnsServerReturnNothing|Couldn.t resolve host name|errCode:1007900006|errCode:1007900028|FinalUrlRequestOccursError' "$TMP_DIR/hilog-browser.txt")
+BROWSER_VPN=$(count_lines 'vpnEnabled|vpn-tun' "$TMP_DIR/hilog-browser.txt")
+APP_EVIDENCE=$(count_lines 'MVP-01B|protect|\[TUN\]|\[DNS\]|Traffic stats source=native-mihomo|Core start status' "$TMP_DIR/hilog-connect.txt")
+APP_EVIDENCE=$((APP_EVIDENCE + $(count_lines 'MVP-01B|protect|\[TUN\]|\[DNS\]|Traffic stats source=native-mihomo|Core start status' "$TMP_DIR/hilog-app-browser.txt")))
+CRASH_SIGNALS=$(count_lines 'DfxFaultLogger|Ability on scheduler died|On ability died' "$TMP_DIR/hilog-connect.txt")
+CRASH_SIGNALS=$((CRASH_SIGNALS + $(count_lines 'DfxFaultLogger|Ability on scheduler died|On ability died' "$TMP_DIR/hilog-app-browser.txt")))
+RUNTIME_SOURCE="$(runtime_field "$TMP_DIR/runtime-after-browser.json" trafficSource)"
+RUNTIME_TODAY_UP="$(runtime_field "$TMP_DIR/runtime-after-browser.json" todayUploadBytes)"
+RUNTIME_TODAY_DOWN="$(runtime_field "$TMP_DIR/runtime-after-browser.json" todayDownloadBytes)"
+RUNTIME_TODAY_TOTAL=$(( ${RUNTIME_TODAY_UP:-0} + ${RUNTIME_TODAY_DOWN:-0} ))
+
+RESULT="FAIL"
+if [ "$CRASH_SIGNALS" -eq 0 ] && [ "$BROWSER_ERRORS" -eq 0 ] && [ "$APP_EVIDENCE" -gt 0 ] &&
+  { [ "$RX_DELTA" -gt 0 ] || [ "$TX_DELTA" -gt 0 ] || [ "$RUNTIME_TODAY_TOTAL" -gt 0 ]; }; then
+  RESULT="PASS"
+elif [ "$CRASH_SIGNALS" -eq 0 ] && { [ "$RX_DELTA" -gt 0 ] || [ "$TX_DELTA" -gt 0 ] ||
+  [ "$RUNTIME_TODAY_TOTAL" -gt 0 ] || [ "$APP_EVIDENCE" -gt 0 ]; }; then
+  RESULT="PARTIAL"
+fi
+
+SUMMARY="M2-5 browser smoke $RESULT url=$TARGET_URL source=native-mihomo runtimeSource=$RUNTIME_SOURCE runtimeTodayBytes=$RUNTIME_TODAY_TOTAL rxDelta=$RX_DELTA txDelta=$TX_DELTA browserVpnLogs=$BROWSER_VPN browserErrors=$BROWSER_ERRORS appEvidence=$APP_EVIDENCE crashSignals=$CRASH_SIGNALS"
+SUMMARY_FILE="$TMP_DIR/poc-smoke-summary.txt"
+printf '%s\n' "$SUMMARY" > "$SUMMARY_FILE"
+run_hdc shell mkdir -p "$APP_LOG_DIR" >/dev/null || true
+run_hdc file send "$SUMMARY_FILE" "$APP_LOG_DIR/poc-smoke-summary.txt" >/dev/null || true
+
+echo "$SUMMARY"
+echo "MVP-01 browser verify $RESULT"
 echo "logs: $TMP_DIR"
+if [ "$RESULT" = "FAIL" ]; then
+  exit 1
+fi

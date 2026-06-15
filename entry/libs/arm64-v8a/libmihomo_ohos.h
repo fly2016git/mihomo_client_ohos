@@ -110,6 +110,9 @@ extern int MihomoOhosStop();
 extern int MihomoOhosGracefulStop();
 extern char* MihomoOhosProxyDelay(char* nodeName, char* testURL, int timeoutMs);
 extern char* MihomoOhosGroupDelay(char* groupName, char* testURL, int timeoutMs);
+extern char* MihomoOhosTrafficStats();
+extern int MihomoOhosStartTrafficStatsWriter(char* statsPath);
+extern int MihomoOhosStopTrafficStatsWriter();
 extern char* MihomoOhosLastError();
 extern void MihomoOhosFreeCString(char* s);
 

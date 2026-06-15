@@ -6,7 +6,8 @@ import {
   RuntimeEvent,
   RuntimeEventLevel,
   RuntimeEventSource,
-  RuntimeSnapshot
+  RuntimeSnapshot,
+  TrafficStatsSource
 } from '../models/MvpTypes';
 
 const MAX_EVENTS = 60;
@@ -65,6 +66,15 @@ export class RuntimeStore {
     }
     if (patch.downloadSpeed !== undefined) {
       state.snapshot.downloadSpeed = patch.downloadSpeed;
+    }
+    if (patch.todayUploadBytes !== undefined) {
+      state.snapshot.todayUploadBytes = patch.todayUploadBytes;
+    }
+    if (patch.todayDownloadBytes !== undefined) {
+      state.snapshot.todayDownloadBytes = patch.todayDownloadBytes;
+    }
+    if (patch.trafficSource !== undefined) {
+      state.snapshot.trafficSource = patch.trafficSource;
     }
     state.snapshot.updatedAt = Date.now();
     this.saveStateFile(state);
@@ -136,6 +146,13 @@ export class RuntimeStore {
     lines.push('node=' + selectedNode);
     lines.push('meta=' + selectedNodeMeta);
     lines.push('');
+    lines.push('[traffic]');
+    lines.push('source=' + resolvedSnapshot.trafficSource);
+    lines.push('uploadSpeed=' + resolvedSnapshot.uploadSpeed);
+    lines.push('downloadSpeed=' + resolvedSnapshot.downloadSpeed);
+    lines.push('todayUploadBytes=' + resolvedSnapshot.todayUploadBytes);
+    lines.push('todayDownloadBytes=' + resolvedSnapshot.todayDownloadBytes);
+    lines.push('');
     lines.push('[pocSmoke]');
     lines.push(this.getPocSmokeSummary());
     lines.push('');
@@ -160,7 +177,10 @@ export class RuntimeStore {
       lastError: '',
       lastEvent: message,
       uploadSpeed: 0,
-      downloadSpeed: 0
+      downloadSpeed: 0,
+      todayUploadBytes: 0,
+      todayDownloadBytes: 0,
+      trafficSource: 'none'
     });
     this.appendEvent(message, 'info', 'ui');
   }
@@ -212,7 +232,10 @@ export class RuntimeStore {
         lastError: '',
         lastEvent: 'Ready',
         uploadSpeed: 0,
-        downloadSpeed: 0
+        downloadSpeed: 0,
+        todayUploadBytes: 0,
+        todayDownloadBytes: 0,
+        trafficSource: 'none'
       },
       events: [this.formatEvent({
         timestamp: now,
@@ -232,9 +255,28 @@ export class RuntimeStore {
   private normalizeStateFile(parsed: RuntimeStateFile): RuntimeStateFile {
     const runtimeEvents = this.normalizeRuntimeEvents(parsed.runtimeEvents, parsed.events);
     return {
-      snapshot: parsed.snapshot,
+      snapshot: this.normalizeSnapshot(parsed.snapshot),
       events: runtimeEvents.map((event: RuntimeEvent) => this.formatEvent(event)),
       runtimeEvents
+    };
+  }
+
+  private normalizeSnapshot(snapshot: RuntimeSnapshot): RuntimeSnapshot {
+    return {
+      runtimeState: snapshot.runtimeState,
+      coreState: snapshot.coreState,
+      activeProfileId: snapshot.activeProfileId,
+      activeProfileName: snapshot.activeProfileName,
+      tunFd: typeof snapshot.tunFd === 'number' ? snapshot.tunFd : -1,
+      startedAt: typeof snapshot.startedAt === 'number' ? snapshot.startedAt : 0,
+      updatedAt: typeof snapshot.updatedAt === 'number' ? snapshot.updatedAt : Date.now(),
+      lastError: snapshot.lastError ? snapshot.lastError : '',
+      lastEvent: snapshot.lastEvent ? snapshot.lastEvent : '',
+      uploadSpeed: typeof snapshot.uploadSpeed === 'number' ? snapshot.uploadSpeed : 0,
+      downloadSpeed: typeof snapshot.downloadSpeed === 'number' ? snapshot.downloadSpeed : 0,
+      todayUploadBytes: typeof snapshot.todayUploadBytes === 'number' ? snapshot.todayUploadBytes : 0,
+      todayDownloadBytes: typeof snapshot.todayDownloadBytes === 'number' ? snapshot.todayDownloadBytes : 0,
+      trafficSource: this.safeTrafficSource(snapshot.trafficSource)
     };
   }
 
@@ -315,6 +357,13 @@ export class RuntimeStore {
       return source;
     }
     return 'ui';
+  }
+
+  private safeTrafficSource(source: TrafficStatsSource): TrafficStatsSource {
+    if (source === 'tun-interface' || source === 'native-mihomo') {
+      return source;
+    }
+    return 'none';
   }
 
   private inferLevel(line: string): RuntimeEventLevel {

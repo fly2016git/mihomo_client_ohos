@@ -54,6 +54,9 @@ using MihomoOhosIsRunningFn = int32_t (*)();
 using MihomoOhosLastErrorFn = const char *(*)();
 using MihomoOhosProxyDelayFn = const char *(*)(const char *, const char *, int32_t);
 using MihomoOhosGroupDelayFn = const char *(*)(const char *, const char *, int32_t);
+using MihomoOhosTrafficStatsFn = const char *(*)();
+using MihomoOhosStartTrafficStatsWriterFn = int32_t (*)(const char *);
+using MihomoOhosStopTrafficStatsWriterFn = int32_t (*)();
 using MihomoOhosFreeCStringFn = void (*)(void *);
 
 struct GoCoreApi {
@@ -93,6 +96,9 @@ struct MihomoCoreApi {
     MihomoOhosLastErrorFn lastErrorFn = nullptr;
     MihomoOhosProxyDelayFn proxyDelay = nullptr;
     MihomoOhosGroupDelayFn groupDelay = nullptr;
+    MihomoOhosTrafficStatsFn trafficStats = nullptr;
+    MihomoOhosStartTrafficStatsWriterFn startTrafficStatsWriter = nullptr;
+    MihomoOhosStopTrafficStatsWriterFn stopTrafficStatsWriter = nullptr;
     MihomoOhosFreeCStringFn freeString = nullptr;
     std::string lastError;
 };
@@ -554,18 +560,26 @@ bool EnsureMihomoCoreLocked()
     LoadSymbol(handle, "MihomoOhosGracefulStop", reinterpret_cast<void **>(&next.gracefulStop));
     LoadSymbol(handle, "MihomoOhosProxyDelay", reinterpret_cast<void **>(&next.proxyDelay));
     LoadSymbol(handle, "MihomoOhosGroupDelay", reinterpret_cast<void **>(&next.groupDelay));
+    LoadSymbol(handle, "MihomoOhosTrafficStats", reinterpret_cast<void **>(&next.trafficStats));
+    LoadSymbol(handle, "MihomoOhosStartTrafficStatsWriter",
+        reinterpret_cast<void **>(&next.startTrafficStatsWriter));
+    LoadSymbol(handle, "MihomoOhosStopTrafficStatsWriter",
+        reinterpret_cast<void **>(&next.stopTrafficStatsWriter));
 
     next.lastError.clear();
     next.setProtectBridge(reinterpret_cast<void *>(NapiProtectBridgeImpl));
     g_mihomo = next;
     OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
-        "mihomo core loaded and protect bridge registered hooks=%{public}d/%{public}d/%{public}d graceful=%{public}d delay=%{public}d/%{public}d",
+        "mihomo core loaded and protect bridge registered hooks=%{public}d/%{public}d/%{public}d graceful=%{public}d delay=%{public}d/%{public}d traffic=%{public}d writer=%{public}d/%{public}d",
         next.enableProtectHook != nullptr ? 1 : 0,
         next.disableProtectHook != nullptr ? 1 : 0,
         next.isRunning != nullptr ? 1 : 0,
         next.gracefulStop != nullptr ? 1 : 0,
         next.proxyDelay != nullptr ? 1 : 0,
-        next.groupDelay != nullptr ? 1 : 0);
+        next.groupDelay != nullptr ? 1 : 0,
+        next.trafficStats != nullptr ? 1 : 0,
+        next.startTrafficStatsWriter != nullptr ? 1 : 0,
+        next.stopTrafficStatsWriter != nullptr ? 1 : 0);
     return true;
 }
 
@@ -1816,6 +1830,175 @@ napi_value TestMihomoGroupDelay(napi_env env, napi_callback_info info)
     return TestMihomoDelay(env, info, true);
 }
 
+napi_value GetMihomoTrafficStats(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    auto *data = new MihomoDelayAsyncData();
+    data->env = env;
+
+    napi_value promise = nullptr;
+    napi_create_promise(env, &data->deferred, &promise);
+
+    napi_value resourceName = nullptr;
+    napi_create_string_utf8(env, "PocMihomoTrafficStats", NAPI_AUTO_LENGTH, &resourceName);
+
+    napi_status status = napi_create_async_work(
+        env,
+        nullptr,
+        resourceName,
+        [](napi_env env, void *rawData) {
+            (void)env;
+            auto *workData = static_cast<MihomoDelayAsyncData *>(rawData);
+            std::lock_guard<std::mutex> lock(g_mihomoMutex);
+            if (!EnsureMihomoCoreLocked()) {
+                workData->error = g_mihomo.lastError;
+                return;
+            }
+            if (g_mihomo.trafficStats == nullptr) {
+                workData->error = "MihomoOhosTrafficStats not available";
+                return;
+            }
+            workData->result = TakeMihomoStringLocked(g_mihomo.trafficStats());
+        },
+        [](napi_env env, napi_status status, void *rawData) {
+            auto *workData = static_cast<MihomoDelayAsyncData *>(rawData);
+            if (status != napi_ok) {
+                napi_reject_deferred(env, workData->deferred, MakeString(env, "mihomo traffic stats async work failed"));
+            } else if (!workData->error.empty()) {
+                napi_reject_deferred(env, workData->deferred, MakeString(env, workData->error));
+            } else {
+                napi_resolve_deferred(env, workData->deferred, MakeString(env, workData->result));
+            }
+            napi_delete_async_work(env, workData->work);
+            delete workData;
+        },
+        data,
+        &data->work
+    );
+
+    if (status != napi_ok || napi_queue_async_work(env, data->work) != napi_ok) {
+        napi_delete_async_work(env, data->work);
+        delete data;
+        return MakeRejectedPromise(env, "failed to queue mihomo traffic stats async work");
+    }
+
+    return promise;
+}
+
+napi_value StartMihomoTrafficStatsWriter(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    std::string statsPath;
+    if (argc < 1 || !ReadStringArg(env, args[0], &statsPath) || statsPath.empty()) {
+        return MakeRejectedPromise(env, "traffic stats path must be a non-empty string");
+    }
+
+    auto *data = new MihomoAsyncData();
+    data->env = env;
+    data->op = "MihomoTrafficStatsWriterStart";
+    data->config = statsPath;
+
+    napi_value promise = nullptr;
+    napi_create_promise(env, &data->deferred, &promise);
+
+    napi_value resourceName = nullptr;
+    napi_create_string_utf8(env, "PocMihomoTrafficStatsWriterStart", NAPI_AUTO_LENGTH, &resourceName);
+
+    napi_status status = napi_create_async_work(
+        env,
+        nullptr,
+        resourceName,
+        [](napi_env env, void *rawData) {
+            (void)env;
+            auto *workData = static_cast<MihomoAsyncData *>(rawData);
+            std::lock_guard<std::mutex> lock(g_mihomoMutex);
+            if (!EnsureMihomoCoreLocked()) {
+                workData->code = -1;
+                workData->ok = false;
+                workData->message = g_mihomo.lastError;
+                return;
+            }
+            if (g_mihomo.startTrafficStatsWriter == nullptr) {
+                workData->code = -1;
+                workData->ok = false;
+                workData->message = "MihomoOhosStartTrafficStatsWriter not available";
+                return;
+            }
+            int32_t code = g_mihomo.startTrafficStatsWriter(workData->config.c_str());
+            workData->code = code;
+            workData->ok = code == 0;
+            workData->message = code == 0 ? "traffic stats writer started" : MihomoLastErrorLocked();
+        },
+        CompleteMihomoAsync,
+        data,
+        &data->work
+    );
+
+    if (status != napi_ok || napi_queue_async_work(env, data->work) != napi_ok) {
+        napi_delete_async_work(env, data->work);
+        delete data;
+        return MakeRejectedPromise(env, "failed to queue mihomo traffic stats writer start async work");
+    }
+
+    return promise;
+}
+
+napi_value StopMihomoTrafficStatsWriter(napi_env env, napi_callback_info info)
+{
+    (void)info;
+
+    auto *data = new MihomoAsyncData();
+    data->env = env;
+    data->op = "MihomoTrafficStatsWriterStop";
+
+    napi_value promise = nullptr;
+    napi_create_promise(env, &data->deferred, &promise);
+
+    napi_value resourceName = nullptr;
+    napi_create_string_utf8(env, "PocMihomoTrafficStatsWriterStop", NAPI_AUTO_LENGTH, &resourceName);
+
+    napi_status status = napi_create_async_work(
+        env,
+        nullptr,
+        resourceName,
+        [](napi_env env, void *rawData) {
+            (void)env;
+            auto *workData = static_cast<MihomoAsyncData *>(rawData);
+            std::lock_guard<std::mutex> lock(g_mihomoMutex);
+            if (!EnsureMihomoCoreLocked()) {
+                workData->code = -1;
+                workData->ok = false;
+                workData->message = g_mihomo.lastError;
+                return;
+            }
+            if (g_mihomo.stopTrafficStatsWriter == nullptr) {
+                workData->code = -1;
+                workData->ok = false;
+                workData->message = "MihomoOhosStopTrafficStatsWriter not available";
+                return;
+            }
+            int32_t code = g_mihomo.stopTrafficStatsWriter();
+            workData->code = code;
+            workData->ok = code == 0;
+            workData->message = code == 0 ? "traffic stats writer stopped" : MihomoLastErrorLocked();
+        },
+        CompleteMihomoAsync,
+        data,
+        &data->work
+    );
+
+    if (status != napi_ok || napi_queue_async_work(env, data->work) != napi_ok) {
+        napi_delete_async_work(env, data->work);
+        delete data;
+        return MakeRejectedPromise(env, "failed to queue mihomo traffic stats writer stop async work");
+    }
+
+    return promise;
+}
+
 // ---------- MVP-01B: protect hook control ----------
 
 napi_value EnableProtectHook(napi_env env, napi_callback_info info)
@@ -2001,6 +2184,11 @@ napi_value Init(napi_env env, napi_value exports)
         { "gracefulStopMihomo", nullptr, GracefulStopMihomo, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "testMihomoProxyDelay", nullptr, TestMihomoProxyDelay, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "testMihomoGroupDelay", nullptr, TestMihomoGroupDelay, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "getMihomoTrafficStats", nullptr, GetMihomoTrafficStats, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "startMihomoTrafficStatsWriter", nullptr, StartMihomoTrafficStatsWriter, nullptr, nullptr, nullptr,
+            napi_default, nullptr },
+        { "stopMihomoTrafficStatsWriter", nullptr, StopMihomoTrafficStatsWriter, nullptr, nullptr, nullptr,
+            napi_default, nullptr },
         { "startTunFdReadinessProbe", nullptr, StartTunFdReadinessProbe, nullptr, nullptr, nullptr, napi_default,
             nullptr },
         { "startTunFdPollProbe", nullptr, StartTunFdPollProbe, nullptr, nullptr, nullptr, napi_default, nullptr },
