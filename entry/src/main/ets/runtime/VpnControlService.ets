@@ -134,6 +134,33 @@ export class VpnControlService {
     });
   }
 
+  async requestProxySelection(requestId: string, profileId: string, groupName: string,
+    nodeName: string): Promise<void> {
+    this.configService.saveProxySelectionRequestState({
+      requestId,
+      profileId,
+      groupName,
+      nodeName,
+      status: 'running',
+      updatedAt: Date.now(),
+      error: ''
+    });
+    this.runtimeStore.appendEvent('Proxy selection requested group=' + groupName + ' node=' + nodeName);
+    await vpnExtension.startVpnExtensionAbility({
+      bundleName: BUNDLE_NAME,
+      abilityName: VPN_ABILITY_NAME,
+      parameters: {
+        command: 'selectProxy',
+        requestId,
+        profileId,
+        groupName,
+        nodeName,
+        requestedAt: new Date().toISOString(),
+        requestedBy: 'ui'
+      }
+    });
+  }
+
   private async wait(ms: number): Promise<void> {
     return new Promise<void>((resolve: () => void) => {
       setTimeout(() => {

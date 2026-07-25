@@ -1,12 +1,12 @@
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, bundleManager, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { vpnExtension } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { ConfigService } from '../config/ConfigService';
+import { ConfigValidationService } from '../config/ConfigValidationService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { UiRefreshBus } from '../runtime/UiRefreshBus';
 import { SubscriptionService } from '../subscription/SubscriptionService';
-import { Profile, SubscriptionUpdateResult } from '../models/MvpTypes';
 
 const DOMAIN = 0x0000;
 const TAG = 'MihomoPocEntry';
@@ -28,6 +28,10 @@ const MVP_INVALID_CONFIG =
     'mode: direct\n' +
     'rules:\n' +
     '  - MATCH,DIRECT\n';
+const MVP_INVALID_YAML =
+  'proxies:\n' +
+    '  - name: broken\n' +
+    '    port: [\n';
 
 interface MvpCommandParams extends Record<string, Object> {
   command: string;
@@ -161,12 +165,16 @@ export default class EntryAbility extends UIAbility {
     if (command.length === 0) {
       return;
     }
+    if (!this.isDebugBuild()) {
+      hilog.warn(DOMAIN, TAG, 'ignored debug command in release build command=%{public}s', command);
+      return;
+    }
 
     try {
       const configService = new ConfigService(this.context.filesDir);
       const runtimeStore = new RuntimeStore(this.context.filesDir);
       if (command === 'setInvalidConfig') {
-        const result = configService.saveDefaultRawYaml(MVP_INVALID_CONFIG);
+        const result = configService.forceWriteDefaultRawYamlForSmoke(MVP_INVALID_CONFIG);
         runtimeStore.appendEvent('MVP command setInvalidConfig ok=' + result.ok);
         hilog.info(DOMAIN, TAG, 'mvpCommand setInvalidConfig source=%{public}s ok=%{public}s',
           source, result.ok ? 'true' : 'false');
@@ -183,6 +191,20 @@ export default class EntryAbility extends UIAbility {
       if (command === 'resetRuntime') {
         runtimeStore.resetToIdle('MVP command resetRuntime');
         hilog.info(DOMAIN, TAG, 'mvpCommand resetRuntime source=%{public}s', source);
+        return;
+      }
+      if (command === 'validateConfig') {
+        const validationCase = (params?.['validationCase'] as string | undefined) ?? 'valid';
+        const content = validationCase === 'invalidSyntax' ? MVP_INVALID_YAML : MVP_DEFAULT_CONFIG;
+        const validationService = new ConfigValidationService(this.context.filesDir);
+        validationService.validate(content).then((result) => {
+          runtimeStore.appendEvent('MVP command validateConfig case=' + validationCase + ' ok=' + result.ok);
+          hilog.info(DOMAIN, TAG, 'mvpCommand validateConfig complete case=%{public}s ok=%{public}s',
+            validationCase, result.ok ? 'true' : 'false');
+        }).catch((err: Object) => {
+          hilog.error(DOMAIN, TAG, 'mvpCommand validateConfig failed case=%{public}s err=%{public}s',
+            validationCase, this.toErrorText(err));
+        });
         return;
       }
       if (command === 'prepareSubscription') {
@@ -235,6 +257,40 @@ export default class EntryAbility extends UIAbility {
         });
         return;
       }
+      if (command === 'selectProxy') {
+        const requestId = (params?.['requestId'] as string | undefined) ?? 'select-smoke-' + Date.now().toString();
+        const profileId = (params?.['profileId'] as string | undefined) ?? '';
+        const groupName = (params?.['groupName'] as string | undefined) ?? '';
+        const nodeName = (params?.['nodeName'] as string | undefined) ?? '';
+        configService.saveProxySelectionRequestState({
+          requestId,
+          profileId,
+          groupName,
+          nodeName,
+          status: 'running',
+          updatedAt: Date.now(),
+          error: ''
+        });
+        vpnExtension.startVpnExtensionAbility({
+          bundleName: BUNDLE_NAME,
+          abilityName: VPN_ABILITY_NAME,
+          parameters: {
+            command: 'selectProxy',
+            requestId,
+            profileId,
+            groupName,
+            nodeName,
+            requestedAt: new Date().toISOString(),
+            requestedBy: source + ':mvpCommand'
+          }
+        }).then(() => {
+          hilog.info(DOMAIN, TAG, 'mvpCommand selectProxy returned ok request=%{public}s', requestId);
+        }).catch((err: Object) => {
+          hilog.error(DOMAIN, TAG, 'mvpCommand selectProxy failed request=%{public}s err=%{public}s',
+            requestId, this.toErrorText(err));
+        });
+        return;
+      }
       hilog.warn(DOMAIN, TAG, 'unknown mvpCommand=%{public}s source=%{public}s', command, source);
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'mvpCommand failed command=%{public}s source=%{public}s err=%{public}s',
@@ -254,26 +310,20 @@ export default class EntryAbility extends UIAbility {
     }
 
     const subscriptionService = new SubscriptionService(this.context.filesDir);
-    subscriptionService.addSubscription(subscriptionName, subscriptionUrl).then((profile: Profile) => {
-      runtimeStore.appendEvent('MVP command prepareSubscription added profile=' + profile.id);
-      hilog.info(DOMAIN, TAG, 'mvpCommand prepareSubscription added source=%{public}s profile=%{public}s',
-        source, profile.id);
-      return subscriptionService.update(profile.id).then((result: SubscriptionUpdateResult) => {
-        if (!result.ok) {
-          runtimeStore.appendEvent('MVP command prepareSubscription failed profile=' + profile.id +
-            ' err=' + result.error);
-          hilog.error(DOMAIN, TAG,
-            'mvpCommand prepareSubscription failed source=%{public}s profile=%{public}s status=%{public}d err=%{public}s',
-            source, profile.id, result.statusCode, result.error);
-          return;
-        }
-        const activeProfile = configService.setActiveProfile(profile.id);
-        runtimeStore.appendEvent('MVP command prepareSubscription ok profile=' + profile.id +
-          ' bytes=' + result.bytes);
-        hilog.info(DOMAIN, TAG,
-          'mvpCommand prepareSubscription ok source=%{public}s profile=%{public}s active=%{public}s status=%{public}d bytes=%{public}d',
-          source, profile.id, activeProfile ? 'true' : 'false', result.statusCode, result.bytes);
-      });
+    subscriptionService.addSubscriptionAndUpdate(subscriptionName, subscriptionUrl).then((result) => {
+      if (!result.profile || !result.result.ok) {
+        runtimeStore.appendEvent('MVP command prepareSubscription failed err=' + result.result.error);
+        hilog.error(DOMAIN, TAG,
+          'mvpCommand prepareSubscription failed source=%{public}s status=%{public}d err=%{public}s',
+          source, result.result.statusCode, result.result.error);
+        return;
+      }
+      const activeProfile = configService.setActiveProfile(result.profile.id);
+      runtimeStore.appendEvent('MVP command prepareSubscription ok profile=' + result.profile.id +
+        ' bytes=' + result.result.bytes);
+      hilog.info(DOMAIN, TAG,
+        'mvpCommand prepareSubscription ok source=%{public}s profile=%{public}s active=%{public}s status=%{public}d bytes=%{public}d',
+        source, result.profile.id, activeProfile ? 'true' : 'false', result.result.statusCode, result.result.bytes);
     }).catch((err: Object) => {
       const errorText = this.toErrorText(err);
       runtimeStore.appendEvent('MVP command prepareSubscription failed: ' + errorText);
@@ -311,10 +361,28 @@ export default class EntryAbility extends UIAbility {
   }
 
   private sanitizeParamValue(name: string, value: Object): Object {
-    if (typeof value === 'string' && name.toLowerCase().indexOf('url') >= 0) {
-      return this.redactUrl(value);
+    if (typeof value === 'string') {
+      const lowerName = name.toLowerCase();
+      if (lowerName.indexOf('url') >= 0 || lowerName.indexOf('uri') >= 0) {
+        return this.redactUrl(value);
+      }
+      if (lowerName.indexOf('token') >= 0 || lowerName.indexOf('password') >= 0 ||
+        lowerName.indexOf('secret') >= 0 || lowerName.indexOf('authorization') >= 0) {
+        return '<redacted>';
+      }
     }
     return value;
+  }
+
+  private isDebugBuild(): boolean {
+    try {
+      const bundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
+      return bundleInfo.appInfo.debug;
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'failed to resolve build mode err=%{public}s', this.toErrorText(err));
+      return false;
+    }
   }
 
   private redactUrl(url: string): string {

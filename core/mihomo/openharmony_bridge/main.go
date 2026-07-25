@@ -28,6 +28,7 @@ import (
 	"github.com/metacubex/mihomo/adapter/outboundgroup"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/dialer"
+	"github.com/metacubex/mihomo/component/profile/cachefile"
 	"github.com/metacubex/mihomo/config"
 	CN "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub"
@@ -98,6 +99,11 @@ type trafficStatsResult struct {
 	Error     string `json:"error"`
 }
 
+type configValidationResult struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error"`
+}
+
 var (
 	trafficStatsMu   sync.Mutex
 	trafficStatsPath string
@@ -132,6 +138,24 @@ func trafficStatsCString(result trafficStatsResult) *C.char {
 		return C.CString(fmt.Sprintf(`{"ok":false,"source":"native-mihomo","error":"marshal traffic stats failed: %s"}`, err.Error()))
 	}
 	return C.CString(string(data))
+}
+
+func configValidationCString(result configValidationResult) *C.char {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return C.CString(fmt.Sprintf(`{"ok":false,"error":"marshal config validation failed: %s"}`, err.Error()))
+	}
+	return C.CString(string(data))
+}
+
+func validateConfigText(raw string) configValidationResult {
+	if raw == "" {
+		return configValidationResult{OK: false, Error: "empty config"}
+	}
+	if _, err := config.UnmarshalRawConfig([]byte(raw)); err != nil {
+		return configValidationResult{OK: false, Error: err.Error()}
+	}
+	return configValidationResult{OK: true}
 }
 
 func currentTrafficStatsResult() trafficStatsResult {
@@ -648,11 +672,28 @@ func MihomoOhosGracefulStop() C.int {
 	// goroutines as part of reload. This call may take a moment but is
 	// safer than abruptly closing the fd while goroutines are reading.
 	bridgeLog("MihomoOhosGracefulStop: re-parsing with stopped config")
-	if err := hub.Parse([]byte(stoppedConfig)); err != nil {
+	parseResult := make(chan error, 1)
+	go func() {
+		parseResult <- hub.Parse([]byte(stoppedConfig))
+	}()
+
+	var parseErr error
+	select {
+	case parseErr = <-parseResult:
+	case <-time.After(3 * time.Second):
 		stateMu.Lock()
-		setLastErr(err)
+		started = false
+		activeTunFd = -1
+		lastErrText = "graceful stop config reload timed out"
 		stateMu.Unlock()
-		bridgeLog("MihomoOhosGracefulStop: hub.Parse(stoppedConfig) failed: " + err.Error())
+		bridgeLog("MihomoOhosGracefulStop: hub.Parse(stoppedConfig) timeout")
+		return -2
+	}
+	if parseErr != nil {
+		stateMu.Lock()
+		setLastErr(parseErr)
+		stateMu.Unlock()
+		bridgeLog("MihomoOhosGracefulStop: hub.Parse(stoppedConfig) failed: " + parseErr.Error())
 		return -1
 	}
 
@@ -775,6 +816,55 @@ func MihomoOhosGroupDelay(groupName *C.char, testURL *C.char, timeoutMs C.int) *
 		result.Error = "no proxy delay result"
 	}
 	return delayResultCString(result)
+}
+
+//export MihomoOhosSelectProxy
+func MihomoOhosSelectProxy(groupName *C.char, nodeName *C.char) C.int {
+	var group string
+	var node string
+	if groupName != nil {
+		group = C.GoString(groupName)
+	}
+	if nodeName != nil {
+		node = C.GoString(nodeName)
+	}
+
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	if group == "" || node == "" {
+		lastErrText = "proxy group and node names must not be empty"
+		return -1
+	}
+	if !started {
+		lastErrText = "mihomo not running"
+		return -2
+	}
+	proxy, ok := tunnel.Proxies()[group]
+	if !ok {
+		lastErrText = "proxy group not found: " + group
+		return -3
+	}
+	selector, ok := proxy.Adapter().(outboundgroup.SelectAble)
+	if !ok {
+		lastErrText = "proxy group is not selectable: " + group
+		return -4
+	}
+	if err := selector.Set(node); err != nil {
+		lastErrText = "select proxy failed: " + err.Error()
+		return -5
+	}
+	cachefile.Cache().SetSelected(group, node)
+	lastErrText = ""
+	bridgeLog(fmt.Sprintf("MihomoOhosSelectProxy: group=%s node=%s", group, node))
+	return 0
+}
+
+//export MihomoOhosValidateConfig
+func MihomoOhosValidateConfig(content *C.char) *C.char {
+	if content == nil {
+		return configValidationCString(configValidationResult{OK: false, Error: "empty config"})
+	}
+	return configValidationCString(validateConfigText(C.GoString(content)))
 }
 
 //export MihomoOhosTrafficStats

@@ -1,6 +1,6 @@
 # 下一阶段开发计划
 
-日期：2026-06-14
+日期：2026-07-25
 
 关联资料：
 
@@ -111,7 +111,7 @@
 - 设置：
   - 启动模式：规则 / 全局 / 直连。
   - DNS 模式。
-  - IPv6、UDP 转发、连接后自动更新订阅、开机自启开关。
+  - IPv6、UDP 转发、连接后自动更新订阅开关。
   - 日志级别。
   - 清理缓存、重置配置。
 
@@ -138,7 +138,7 @@
 | 流量 | Snapshot 有字段但缺真实更新 | 需要 native 统计接口或轻量采样方案 |
 | 设置 | 只有信息展示 | 需要 SettingsStore 和 connect 参数联动 |
 | 诊断 | 原型有完整面板，当前无独立页 | 需要实现诊断面板和回归脚本结果读取 |
-| 配置解析 | 手写字符串解析 YAML | 下一阶段应收敛风险，至少补强代理组/规则统计解析和测试 |
+| 配置解析 | ArkTS 业务规则 + Go/mihomo 严格 YAML 校验 | 已覆盖保存、创建、导入和订阅更新，后续补更多真实订阅样本 |
 | 验证 | 脚本存在 | 需要形成新阶段 smoke + UI 回归清单 |
 
 ## 4. 里程碑计划
@@ -212,7 +212,7 @@
 完成情况：
 
 - 新增 `AppSettings` 数据模型和 `SettingsService`，设置持久化到 `mihomo/state/settings.json`。
-- 设置项覆盖：VPN 路由模式、代理启动模式、DNS 模式、VPN DNS 地址、IPv6、UDP、连接前自动刷新订阅、开机自启、日志级别。
+- 设置项覆盖：VPN 路由模式、代理启动模式、DNS 模式、VPN DNS 地址、IPv6、UDP、连接前自动刷新订阅、日志级别。
 - `ConfigService.generateRuntimeYaml()` 已接入 settings，生成 runtime YAML 时写入 `mode`、`log-level`、`ipv6`、`dns.enhanced-mode`、`dns.ipv6`。
 - `SubscriptionService.update()` 刷新订阅后会使用当前 settings 生成 runtime YAML，避免刷新订阅覆盖用户运行参数。
 - `VpnControlService.connect()` 会读取 settings，按开关在连接前自动刷新订阅；刷新失败时沿用旧 runtime 并写入运行事件，不阻断连接。
@@ -224,7 +224,7 @@
 
 遗留到后续里程碑：
 
-- `autoStart` 已持久化，系统级开机自启注册能力尚未接入。
+- 开机自启已从产品范围移除，不申请系统启动完成广播权限。
 - `udpEnabled` 已持久化并传入连接参数，native/core 侧更细的 UDP 策略控制留到后续网络能力阶段。
 - 设置项目前采用点击循环选择，后续可替换为更完整的 picker/select 控件。
 
@@ -240,7 +240,6 @@ interface AppSettings {
   ipv6Enabled: boolean;
   udpEnabled: boolean;
   autoRefreshSubscriptionOnConnect: boolean;
-  autoStart: boolean;
   logLevel: 'debug' | 'info' | 'warning' | 'error';
 }
 ```
@@ -263,7 +262,7 @@ interface AppSettings {
 
 目标：节点页从“raw proxies 列表展示”升级为“代理组 + 当前选择 + 可选择”的控制面。
 
-状态：已完成（2026-06-14）。
+状态：已完成（2026-07-25，补齐运行中实时切换）。
 
 完成情况：
 
@@ -274,12 +273,13 @@ interface AppSettings {
 - 按原型补齐节点页 `测速全部`、`测速当前组` 两个入口；占位测速已替换为 native/core 真实延迟 API，通过 VPN Extension 进程调用 mihomo `URLTest` 并写入共享测速状态。
 - 首页当前节点卡片和诊断面板已从当前 group/node 读取，不再写死 `Proxy`。
 - Profile chips/列表已展示当前配置规则数量。
-- `PocNative` 已增加 `selectProxy(group, node)` 类型定义占位；native/core 实时切换尚未实现，运行中选择节点会提示“重连后生效”，不会误报核心已切换。
+- 已完成 Go core、C++ NAPI、VPN Extension 和 UI 的异步实时节点切换链路；核心确认成功后才持久化选择，启动连接时会恢复已保存节点。
+- 已增加 `mvpCommand=selectProxy` 和 `scripts/run_m2_3_proxy_selection_smoke.sh`，自动验证在线切换、结果回传、持久化恢复和最终断开。
 - 真机 `192.168.3.65:37805` 已完成最终 HAP 覆盖安装和冒烟验证：节点页显示 `Auto` group、搜索框、`测速全部`、`测速当前组`、`28 / 28` 节点；选择 `爱沙尼亚-EE-1-流量倍率:0.2` 后，节点列表选中圆点、首页当前节点、诊断页 `Auto / 爱沙尼亚-EE-1-流量倍率:0.2` 同步更新；真实延迟验证写入 `Latency test native scope=request groups=1 ok=21 failed=0` 运行事件，并在 `proxy-latency.json` 生成 21 条真实 ms 记录。
+- 真机 `192.168.3.65:39589` 已验证 `Auto` 从 `日本-TY-3-流量倍率:0.6` 在线切换到 `日本-TY-4-流量倍率:0.6` 并恢复原节点；请求状态为 `complete`，最终 VPN 状态为 `idle/stopped`，无 native crash。
 
 遗留到后续里程碑：
 
-- 目前选择节点仅维护 App 本地状态，尚未调用 mihomo core 的实时 selector API；接入 native bridge 后再把运行中选择升级为实时生效。
 - 原型中的手机 Bottom Sheet 和平板右侧独立节点面板尚未单独拆分，当前先复用完整节点页控制面完成闭环。
 
 范围：
@@ -305,16 +305,16 @@ interface ProxyGroup {
   - 当前节点卡片。
   - 手机 Bottom Sheet。
   - 平板右侧节点面板。
-- Native/核心预留：
-  - `PocNative` 增加 `selectProxy(group, node)` 类型定义占位，等 C++/Go bridge 实现后接入。
-  - 连接中选择节点时，如果 native 未实现，明确显示“仅保存本地选择，重连生效”。
+- Native/核心：
+  - `PocNative.selectProxy(group, node)` 使用异步 NAPI 调用 Go bridge，避免阻塞 JS 线程与 VPN `protect()` 回调。
+  - VPN Extension 跨进程处理切换请求，UI 轮询共享请求状态，并只在核心切换成功后更新本地选择。
 
 验收：
 
 - 使用含多个 `proxy-groups` 的 YAML，可以展示所有组和节点。
 - 切换 group 后节点列表同步变化。
 - 选择节点后首页当前节点、诊断面板和节点列表同步。
-- native `selectProxy` 未完成时，不误报“已切换核心节点”。
+- 连接中切换节点时，核心、共享选择状态和 UI 当前节点保持一致；失败时不覆盖原选择。
 
 ### M2-4：日志与诊断可观测性
 
@@ -474,6 +474,37 @@ interface RuntimeEvent {
 - 无效 YAML 保存失败时，旧 runtime 仍可连接。
 - 文件导入失败有明确错误，不产生半 profile。
 
+状态：已完成（2026-07-25）。
+
+- 已落地系统文件导入与校验、二维码订阅扫描、订阅成功后再落 profile、active profile 删除拦截和删除确认，配置保存失败不覆盖旧 runtime。
+- 已增加 YAML 空节点/规则/分组及无效引用 warning，并增加运行时保护下的清理缓存、重置全部配置与危险操作确认。
+- 已补 M2-6 smoke 脚本 `scripts/run_m2_6_config_reliability_smoke.sh`。
+- Go bridge 已新增 `MihomoOhosValidateConfig`，直接复用 mihomo 配置解析和 `yaml.v3` 做严格语法/类型校验；NAPI 与 ArkTS 均使用异步接口，避免阻塞 UI 线程。
+- 严格校验已接入编辑保存、本地配置创建、系统文件导入和订阅更新，并补充合法配置、YAML 语法错误和字段类型错误的 Go 测试。
+- 真机 `192.168.3.65:39589` 的 M2-6 smoke 已通过：合法配置接受、损坏 YAML 拒绝、无效配置不覆盖 runtime、失败订阅不残留 profile，结束后恢复原数据与 `idle/stopped`。
+
+### M2-7：发布加固与稳定性门禁
+
+目标：将已完成的 MVP 能力收敛为可重复构建、可验证、可安全交付的发布候选版本。
+
+状态：基础开发已完成（2026-07-25），正式发布前仍需执行 50 次稳定性门槛。
+
+完成情况：
+
+- 开机自启已明确移出产品范围，设置模型、设置页和默认配置均不再包含该选项，也不申请系统启动广播权限。
+- `mvpCommand` 仅允许 debug 构建执行，release 构建会忽略调试入口；Want 参数日志会对 token、password、secret、authorization 等字段脱敏。
+- 诊断导出会脱敏 profile 的 `sourceUrl` 和订阅 URL，避免分享诊断信息时泄露凭据。
+- 新增 `scripts/run_release_gate.sh`、`scripts/build_release_hap.sh` 和 `scripts/run_release_stability_smoke.sh`，统一覆盖 diff、Go 测试、核心符号、debug/release HAP 和可选真机 smoke。
+- 连接循环发现同一 VPN Extension 进程第 4 次 graceful reload 可能阻塞；断开完成后现在会主动停止 VPN Extension，使下次连接使用全新的 Go runtime，并保留 native/ArkTS 超时保护。
+- 真机 5 次连接/断开稳定性门禁已通过：无恢复重试、无 crash 信号，每次连接 `tunFd >= 0`、断开 `tunFd=-1`，最终保持 `idle/stopped`。
+- 本地 release gate 已通过 shell 语法、两层 `diff --check`、Go 校验测试、mihomo 核心构建、debug HAP 和 release HAP。
+
+发布前剩余验收：
+
+- 在设备空闲窗口执行 `RELEASE_STABILITY_CYCLES=50 scripts/run_release_stability_smoke.sh`。
+- 对 release HAP 做一次手工安装验收，确认调试命令不可用、正常 UI 连接/断开可用。
+- 完成手机节点 Bottom Sheet、平板右侧节点面板及对应布局回归。
+
 ## 5. 推荐执行顺序
 
 1. M2-1 UI 基线迁移。
@@ -482,6 +513,7 @@ interface RuntimeEvent {
 4. M2-4 日志与诊断可观测性。
 5. M2-5 流量统计与真实 smoke。
 6. M2-6 配置可靠性和导入体验。
+7. M2-7 发布加固与稳定性门禁。
 
 理由：
 
@@ -525,6 +557,7 @@ entry/src/main/ets/proxy/ProxyService.ets               # 可选，节点控制�
   - inline/block proxies 解析。
   - proxy-groups 解析。
   - invalid YAML 不覆盖 runtime。
+  - native parser 拒绝 YAML 语法错误和字段类型错误。
 
 - `SubscriptionService`
   - URL scheme 校验。
@@ -581,24 +614,20 @@ entry/src/main/ets/proxy/ProxyService.ets               # 可选，节点控制�
 | 风险 | 影响 | 策略 |
 | --- | --- | --- |
 | `Index.ets` 继续膨胀 | UI 改动风险高 | M2-1 先按 Builder 分区，M2-3 后再拆 service/component |
-| YAML 字符串解析不稳 | 真实订阅展示错误 | 补测试，限制 MVP 支持范围，必要时下沉 native 解析 |
+| ArkTS 展示解析与 mihomo 语义不一致 | 节点展示正确但 core 拒绝配置 | 保存前统一经过 Go/mihomo 严格校验，ArkTS 仅负责业务 warning 和列表提取 |
 | native stats/selectProxy 未就绪 | 节点和流量只能展示静态状态 | UI 明确区分“本地选择”和“core 已应用”，stats 先用 TUN 计数兜底 |
-| VPN Extension 生命周期不稳定 | UI 显示 connected 但实际断开 | 保留 unknown 恢复策略，增加 health check |
+| VPN Extension 长生命周期下 Go reload 阻塞 | 断开停在 stopping | 每次断开后停止独立 Extension 进程，保留超时、unknown 恢复和稳定性门禁 |
 | 日志来源分散 | 排障困难 | 统一 RuntimeEvent，所有 service 写同一事件入口 |
 | 平板适配返工 | 布局成本高 | M2-1 同时实现手机/平板，而不是手机完成后再补 |
 | 设置项过多但未生效 | 用户误判能力 | 未闭环的设置必须 disabled 或显示“待接入” |
 
 ## 9. 下一步具体任务
 
-建议从下面 8 个任务开始，完成后再进入 native selectProxy/stats：
+当前主链路已具备，下一步按以下顺序收尾：
 
-1. 新增 UI token 和 FlowGuard 文案，替换旧浅色主页。
-2. 在 `Index.ets` 实现手机底部导航和平板侧边栏。
-3. 落地首页状态球、pills、error banner、profile chips、route mode select。
-4. 新增 settings 持久化，并把 route mode 传入 connect。
-5. 将配置页改成新原型结构，保留现有订阅/保存/校验逻辑。
-6. 增加诊断面板，先展示真实 RuntimeSnapshot、active profile、tunFd、lastError。
-7. 扩展 `ConfigService` 的 proxy-groups 解析和测试。
-8. 新增新阶段 smoke 清单或脚本，覆盖连接、断开、订阅、浏览器访问。
-
-完成以上任务后，MVP-02 的产品主链路就能从“工程验证页面”升级为“可试用客户端原型”。
+1. 实现手机节点 Bottom Sheet，区分现有 profile 操作弹窗状态，完成搜索、分组、选择和测速入口。
+2. 实现平板首页右侧节点面板，并回归手机底部导航、平板侧边栏和配置双栏。
+3. 在设备空闲窗口执行 50 次连接/断开稳定性门槛，并保存 smoke 摘要。
+4. 运行真实浏览器 HTTPS smoke 与主要 route mode 矩阵，确认流量统计和断开后网络恢复。
+5. 安装 release HAP 做调试入口隔离、诊断脱敏和正常 UI 连接/断开验收。
+6. 收敛 ArkTS 异常处理/弃用 API 警告，生成带版本号的最终发布产物和验收记录。

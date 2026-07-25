@@ -23,6 +23,7 @@ export interface MihomoLayout {
   runtimePath: string;
   settingsPath: string;
   proxySelectionPath: string;
+  proxySelectionRequestPath: string;
   proxyLatencyPath: string;
   trafficDailyPath: string;
   trafficStatsPath: string;
@@ -70,6 +71,18 @@ export interface ProxySelection {
 
 export interface ProxySelectionState {
   selections: ProxySelection[];
+}
+
+export type ProxySelectionRequestStatus = 'idle' | 'running' | 'complete' | 'error';
+
+export interface ProxySelectionRequestState {
+  requestId: string;
+  profileId: string;
+  groupName: string;
+  nodeName: string;
+  status: ProxySelectionRequestStatus;
+  updatedAt: number;
+  error: string;
 }
 
 export type ProxyLatencyStatus = 'idle' | 'running' | 'complete' | 'error';
@@ -136,7 +149,6 @@ export interface AppSettings {
   ipv6Enabled: boolean;
   udpEnabled: boolean;
   autoRefreshSubscriptionOnConnect: boolean;
-  autoStart: boolean;
   logLevel: LogLevel;
 }
 
@@ -148,7 +160,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   ipv6Enabled: false,
   udpEnabled: true,
   autoRefreshSubscriptionOnConnect: false,
-  autoStart: false,
   logLevel: 'info'
 };
 

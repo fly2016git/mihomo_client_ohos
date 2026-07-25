@@ -48,6 +48,19 @@ export class TrafficStatsService {
     });
   }
 
+  refreshDailySnapshot(): void {
+    const now = Date.now();
+    const daily = this.loadDailyState(now);
+    this.saveDailyState(daily);
+    this.runtimeStore.update({
+      uploadSpeed: 0,
+      downloadSpeed: 0,
+      todayUploadBytes: daily.uploadBytes,
+      todayDownloadBytes: daily.downloadBytes,
+      trafficSource: daily.uploadBytes > 0 || daily.downloadBytes > 0 ? 'native-mihomo' : 'none'
+    });
+  }
+
   async sampleAndUpdate(): Promise<void> {
     const stats = this.readStatsFile();
     const now = Date.now();

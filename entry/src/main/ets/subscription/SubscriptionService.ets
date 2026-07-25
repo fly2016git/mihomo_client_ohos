@@ -2,6 +2,7 @@ import http from '@ohos.net.http';
 import fs from '@ohos.file.fs';
 import { util } from '@kit.ArkTS';
 import { ConfigService } from '../config/ConfigService';
+import { ConfigValidationService } from '../config/ConfigValidationService';
 import { Profile, SubscriptionMeta, SubscriptionUpdateResult, makeSubscriptionMeta } from '../models/MvpTypes';
 import { SettingsService } from '../settings/SettingsService';
 
@@ -10,12 +11,19 @@ const MAX_BYTES = 5 * 1024 * 1024; // 5 MiB
 const TIMEOUT_MS = 15000;
 const DEFAULT_USER_AGENT = 'ClashX Pro/1.118.0';
 
+export interface SubscriptionCreateResult {
+  profile: Profile | null;
+  result: SubscriptionUpdateResult;
+}
+
 export class SubscriptionService {
   private configService: ConfigService;
+  private configValidationService: ConfigValidationService;
   private settingsService: SettingsService;
 
   constructor(filesDir: string) {
     this.configService = new ConfigService(filesDir);
+    this.configValidationService = new ConfigValidationService(filesDir);
     this.settingsService = new SettingsService(filesDir);
   }
 
@@ -36,6 +44,22 @@ export class SubscriptionService {
       throw new Error(error);
     }
     return this.configService.createSubscriptionProfile(name, url);
+  }
+
+  async addSubscriptionAndUpdate(name: string, url: string): Promise<SubscriptionCreateResult> {
+    const profile = await this.addSubscription(name, url);
+    const result = await this.update(profile.id);
+    if (!result.ok) {
+      this.configService.deleteProfile(profile.id);
+      return {
+        profile: null,
+        result
+      };
+    }
+    return {
+      profile: this.configService.getProfile(profile.id) ?? profile,
+      result
+    };
   }
 
   async update(profileId: string): Promise<SubscriptionUpdateResult> {
@@ -105,7 +129,7 @@ export class SubscriptionService {
         profile.subscription.lastStatusCode = 304;
         profile.subscription.failureCount = 0;
         profile.subscription.lastError = '';
-        this.configService.saveProfilesState(this.configService.loadProfilesState());
+        this.configService.updateProfile(profile);
         return this.makeResult(profileId, true, 'not modified', 304, 0);
       }
 
@@ -153,7 +177,7 @@ export class SubscriptionService {
       this.writeTextFile(tmpPath, responseBody);
 
       // Validate YAML
-      const validation = this.configService.validateRawYaml(responseBody);
+      const validation = await this.configValidationService.validate(responseBody);
       if (!validation.ok) {
         this.deleteIfExists(tmpPath);
         const errMsg = 'SUBSCRIPTION_CONFIG_INVALID: ' + validation.errors.join('; ');
@@ -186,7 +210,7 @@ export class SubscriptionService {
       profile.lastValidatedAt = now;
       profile.lastError = '';
 
-      this.configService.saveProfilesState(this.configService.loadProfilesState());
+      this.configService.updateProfile(profile);
 
       return {
         ok: true,
@@ -213,7 +237,7 @@ export class SubscriptionService {
     profile.subscription!.failureCount += 1;
     profile.subscription!.lastError = error;
     try {
-      this.configService.saveProfilesState(this.configService.loadProfilesState());
+      this.configService.updateProfile(profile);
     } catch (_err) {
       // ignore save failure during error recording
     }

@@ -11,7 +11,10 @@ import pocNative, { PocStatus } from '../native/PocNative';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoPocVpn';
+const BUNDLE_NAME = 'com.example.mihomopoc';
+const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 const TUN_EAGAIN_POLL_MS = 50;
+const GRACEFUL_STOP_TIMEOUT_MS = 3000;
 const DEFAULT_UDP_ECHO_HOST = '192.168.3.62';
 const DEFAULT_UDP_ECHO_PORT = 53535;
 const DEFAULT_RAW_UDP_PREFLIGHT = false;
@@ -282,6 +285,12 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       });
       return;
     }
+    if (this.isProductSelectProxyWant(want)) {
+      this.runProductProxySelection(want).catch((err: Object) => {
+        hilog.error(DOMAIN, TAG, 'product proxy selection async failed: %{public}s', this.toErrorText(err));
+      });
+      return;
+    }
     this.startVpnForPoc(want, 'onRequest').catch((err: Object) => {
       hilog.error(DOMAIN, TAG, 'onRequest async failed: %{public}s', this.toErrorText(err));
     });
@@ -294,6 +303,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     }
     if (this.isProductLatencyWant(want)) {
       await this.runProductLatency(want);
+      return;
+    }
+    if (this.isProductSelectProxyWant(want)) {
+      await this.runProductProxySelection(want);
       return;
     }
     await this.startVpnForPoc(want, 'onConnect');
@@ -312,6 +325,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   private isProductLatencyWant(want: Want): boolean {
     const params = want.parameters as Record<string, Object> | undefined;
     return this.getStringParam(params, 'command', '').toLowerCase() === 'latency';
+  }
+
+  private isProductSelectProxyWant(want: Want): boolean {
+    const params = want.parameters as Record<string, Object> | undefined;
+    return this.getStringParam(params, 'command', '').toLowerCase() === 'selectproxy';
   }
 
   private async startVpnForProduct(want: Want, source: string): Promise<void> {
@@ -398,6 +416,8 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       }
       store.appendEvent('Core start status: ' + startStatus.message);
       hilog.info(DOMAIN, TAG, 'MVP-01B core start status: %{public}s', startStatus.message);
+
+      await this.applySavedProxySelections(configService, profile, store);
 
       // MVP-01B: startWithConfig auto-enables the outbound protect hook in the
       // same Go runtime entry as mihomo startup. Do not call enableProtectHook()
@@ -615,6 +635,82 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     }
   }
 
+  private async runProductProxySelection(want: Want): Promise<void> {
+    const store = new RuntimeStore(this.context.filesDir);
+    const configService = new ConfigService(this.context.filesDir);
+    const params = want.parameters as Record<string, Object> | undefined;
+    const requestId = this.getStringParam(params, 'requestId', 'select-' + Date.now().toString());
+    const profileId = this.getStringParam(params, 'profileId', '');
+    const groupName = this.getStringParam(params, 'groupName', '');
+    const nodeName = this.getStringParam(params, 'nodeName', '');
+    let error = '';
+
+    try {
+      const snapshot = store.getSnapshot();
+      if (profileId.length === 0 || groupName.length === 0 || nodeName.length === 0) {
+        throw new Error('invalid proxy selection request');
+      }
+      if (snapshot.runtimeState !== 'connected' || snapshot.coreState !== 'running') {
+        throw new Error('mihomo is not connected');
+      }
+      if (snapshot.activeProfileId !== profileId) {
+        throw new Error('active profile changed');
+      }
+      const status = await pocNative.selectProxy(groupName, nodeName);
+      if (!status.ok) {
+        throw new Error(status.message + ' (code=' + status.code.toString() + ')');
+      }
+      if (!configService.selectLocalProxy(groupName, nodeName, profileId)) {
+        throw new Error('selected node is not present in profile');
+      }
+      configService.saveProxySelectionRequestState({
+        requestId,
+        profileId,
+        groupName,
+        nodeName,
+        status: 'complete',
+        updatedAt: Date.now(),
+        error: ''
+      });
+      store.appendEvent('Proxy selected group=' + groupName + ' node=' + nodeName, 'info', 'core');
+      return;
+    } catch (err) {
+      error = this.toErrorText(err);
+    }
+
+    configService.saveProxySelectionRequestState({
+      requestId,
+      profileId,
+      groupName,
+      nodeName,
+      status: 'error',
+      updatedAt: Date.now(),
+      error
+    });
+    store.appendEvent('Proxy selection failed group=' + groupName + ' node=' + nodeName + ': ' + error,
+      'error', 'core');
+  }
+
+  private async applySavedProxySelections(configService: ConfigService, profile: Profile,
+    store: RuntimeStore): Promise<void> {
+    const selections = configService.listProxySelections(profile.id);
+    for (const selection of selections) {
+      try {
+        const status = await pocNative.selectProxy(selection.groupName, selection.nodeName);
+        if (status.ok) {
+          store.appendEvent('Restored proxy selection group=' + selection.groupName + ' node=' + selection.nodeName,
+            'info', 'core');
+        } else {
+          store.appendEvent('Restore proxy selection failed group=' + selection.groupName + ': ' + status.message,
+            'warn', 'core');
+        }
+      } catch (err) {
+        store.appendEvent('Restore proxy selection failed group=' + selection.groupName + ': ' +
+          this.toErrorText(err), 'warn', 'core');
+      }
+    }
+  }
+
   private saveProductLatencyState(configService: ConfigService, requestId: string, status: 'error',
     error: string, records: ProxyLatencyRecord[]): void {
     const state: ProxyLatencyState = {
@@ -648,7 +744,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       if (hasTunFd) {
         // Try graceful stop: switch mihomo to no-TUN config to drain reader goroutines
         try {
-          const gracefulStatus: PocStatus = await pocNative.gracefulStopMihomo();
+          const gracefulStatus: PocStatus = await this.gracefulStopWithTimeout(GRACEFUL_STOP_TIMEOUT_MS);
           store.appendEvent('Mihomo graceful stop: ' + (gracefulStatus.ok ? 'ok' : 'failed code=' + gracefulStatus.code));
           hilog.info(DOMAIN, TAG, 'MVP-01B gracefulStopMihomo ok=%{public}s code=%{public}d',
             gracefulStatus.ok ? 'true' : 'false', gracefulStatus.code);
@@ -676,6 +772,15 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       });
       store.appendEvent('Disconnected');
       hilog.info(DOMAIN, TAG, 'product disconnect complete');
+      try {
+        await vpnExtension.stopVpnExtensionAbility({
+          bundleName: BUNDLE_NAME,
+          abilityName: VPN_ABILITY_NAME
+        });
+        hilog.info(DOMAIN, TAG, 'VPN extension stop requested after disconnect');
+      } catch (stopErr) {
+        hilog.warn(DOMAIN, TAG, 'VPN extension stop request failed: %{public}s', this.toErrorText(stopErr));
+      }
     } catch (err) {
       const errorText = this.toErrorText(err);
       store.update({
@@ -1643,6 +1748,19 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     return new Promise<void>((resolve) => {
       setTimeout(resolve, ms);
     });
+  }
+
+  private gracefulStopWithTimeout(timeoutMs: number): Promise<PocStatus> {
+    const timeoutResult: Promise<PocStatus> = new Promise<PocStatus>((resolve: (value: PocStatus) => void) => {
+      setTimeout(() => {
+        resolve({
+          ok: false,
+          code: -1,
+          message: 'graceful stop timed out after ' + timeoutMs.toString() + ' ms'
+        });
+      }, timeoutMs);
+    });
+    return Promise.race<PocStatus>([pocNative.gracefulStopMihomo(), timeoutResult]);
   }
 
   private setPoc06State(next: Poc06State, reason: string): void {

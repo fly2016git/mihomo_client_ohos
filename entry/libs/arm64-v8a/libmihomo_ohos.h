@@ -110,6 +110,8 @@ extern int MihomoOhosStop();
 extern int MihomoOhosGracefulStop();
 extern char* MihomoOhosProxyDelay(char* nodeName, char* testURL, int timeoutMs);
 extern char* MihomoOhosGroupDelay(char* groupName, char* testURL, int timeoutMs);
+extern int MihomoOhosSelectProxy(char* groupName, char* nodeName);
+extern char* MihomoOhosValidateConfig(char* content);
 extern char* MihomoOhosTrafficStats();
 extern int MihomoOhosStartTrafficStatsWriter(char* statsPath);
 extern int MihomoOhosStopTrafficStatsWriter();

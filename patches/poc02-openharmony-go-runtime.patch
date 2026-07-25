@@ -1,0 +1,79 @@
+diff --git a/src/runtime/asm_arm64.s b/src/runtime/asm_arm64.s
+index 6d77b08..ab75d9e 100644
+--- a/src/runtime/asm_arm64.s
++++ b/src/runtime/asm_arm64.s
+@@ -48,0 +49,5 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
++#else
++#ifdef GOOS_openharmony
++	MRS_TPIDR_R0			// load TLS base pointer
++	MOVD	R0, R3			// arg 3: TLS base pointer
++	MOVD	$runtime·tls_g(SB), R2 	// arg 2: &tls_g
+@@ -50,0 +56 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
++#endif
+diff --git a/src/runtime/os_linux.go b/src/runtime/os_linux.go
+index 4dcddac..b7dc21d 100644
+--- a/src/runtime/os_linux.go
++++ b/src/runtime/os_linux.go
+@@ -237 +237 @@ func sysargs(argc int32, argv **byte) {
+-	if !libmusl {
++	if !libmusl && !IsOpenharmony {
+@@ -362,0 +363,4 @@ func goenvs() {
++	if IsOpenharmony {
++		envs = make([]string, 0)
++		return
++	}
+diff --git a/src/runtime/runtime1.go b/src/runtime/runtime1.go
+index 092dbac..eb00e38 100644
+--- a/src/runtime/runtime1.go
++++ b/src/runtime/runtime1.go
+@@ -78,0 +79,3 @@ func goargs() {
++	if IsOpenharmony {
++		return
++	}
+diff --git a/src/runtime/tls_arm64.h b/src/runtime/tls_arm64.h
+index 1c0cf73..540535a 100644
+--- a/src/runtime/tls_arm64.h
++++ b/src/runtime/tls_arm64.h
+@@ -6,0 +7 @@
++#define TLSG_IS_VARIABLE
+diff --git a/src/runtime/cgo/gcc_openharmony.c b/src/runtime/cgo/gcc_openharmony.c
+new file mode 100644
+index 0000000..968024a
+--- /dev/null
++++ b/src/runtime/cgo/gcc_openharmony.c
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++//go:build openharmony
++
++#include <pthread.h>
++#include <stdint.h>
++#include "libcgo.h"
++
++#define magic1 (0x23581321345589ULL)
++
++static void
++inittls(void **tlsg, void **tlsbase)
++{
++	pthread_key_t k;
++	int i, err;
++
++	err = pthread_key_create(&k, nil);
++	if (err != 0) {
++		fatalf("pthread_key_create failed: %d", err);
++	}
++	pthread_setspecific(k, (void*)magic1);
++
++	for (i = 0; i < 384; i++) {
++		if (*(tlsbase + i) == (void*)magic1) {
++			*tlsg = (void*)(i * sizeof(void *));
++			pthread_setspecific(k, 0);
++			return;
++		}
++	}
++	fatalf("inittls: could not find pthread key");
++}
++
++void (*x_cgo_inittls)(void **tlsg, void **tlsbase) = inittls;

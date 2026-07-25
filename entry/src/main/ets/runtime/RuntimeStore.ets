@@ -139,7 +139,7 @@ export class RuntimeStore {
     lines.push(JSON.stringify(settings));
     lines.push('');
     lines.push('[activeProfile]');
-    lines.push(JSON.stringify(profile));
+    lines.push(JSON.stringify(this.redactedProfile(profile)));
     lines.push('');
     lines.push('[currentProxy]');
     lines.push('group=' + selectedGroup);
@@ -161,6 +161,58 @@ export class RuntimeStore {
       lines.push(this.formatEvent(event));
     }
     return lines.join('\n');
+  }
+
+  private redactedProfile(profile: Profile): Profile {
+    const next: Profile = {
+      id: profile.id,
+      name: profile.name,
+      type: profile.type,
+      active: profile.active,
+      sourceUrl: this.redactUrl(profile.sourceUrl),
+      rawPath: profile.rawPath,
+      runtimePath: profile.runtimePath,
+      homeDir: profile.homeDir,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+      lastValidatedAt: profile.lastValidatedAt,
+      lastError: profile.lastError
+    };
+    if (profile.subscription) {
+      next.subscription = {
+        url: this.redactUrl(profile.subscription.url),
+        userAgent: profile.subscription.userAgent,
+        lastFetchedAt: profile.subscription.lastFetchedAt,
+        lastSuccessAt: profile.subscription.lastSuccessAt,
+        failureCount: profile.subscription.failureCount,
+        lastStatusCode: profile.subscription.lastStatusCode,
+        lastError: profile.subscription.lastError,
+        lastBytes: profile.subscription.lastBytes
+      };
+    }
+    return next;
+  }
+
+  private redactUrl(url: string): string {
+    if (!url || url.length === 0) {
+      return '';
+    }
+    const schemeIndex = url.indexOf('://');
+    if (schemeIndex < 0) {
+      return '<redacted-url>';
+    }
+    const hostStart = schemeIndex + 3;
+    let hostEnd = url.indexOf('/', hostStart);
+    if (hostEnd < 0) {
+      hostEnd = url.indexOf('?', hostStart);
+    }
+    if (hostEnd < 0) {
+      hostEnd = url.indexOf('#', hostStart);
+    }
+    if (hostEnd < 0) {
+      return url + '/<redacted>';
+    }
+    return url.substring(0, hostEnd) + '/<redacted>';
   }
 
   resetToIdle(message: string): void {

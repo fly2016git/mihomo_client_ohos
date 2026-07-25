@@ -50,7 +50,6 @@ export class SettingsService {
       udpEnabled: patch.udpEnabled ?? current.udpEnabled,
       autoRefreshSubscriptionOnConnect: patch.autoRefreshSubscriptionOnConnect ??
         current.autoRefreshSubscriptionOnConnect,
-      autoStart: patch.autoStart ?? current.autoStart,
       logLevel: patch.logLevel ?? current.logLevel
     };
     this.save(next);
@@ -67,7 +66,6 @@ export class SettingsService {
       udpEnabled: this.safeBoolean(input.udpEnabled, DEFAULT_APP_SETTINGS.udpEnabled),
       autoRefreshSubscriptionOnConnect: this.safeBoolean(input.autoRefreshSubscriptionOnConnect,
         DEFAULT_APP_SETTINGS.autoRefreshSubscriptionOnConnect),
-      autoStart: this.safeBoolean(input.autoStart, DEFAULT_APP_SETTINGS.autoStart),
       logLevel: this.safeLogLevel(input.logLevel)
     };
   }
@@ -81,7 +79,6 @@ export class SettingsService {
       ipv6Enabled: DEFAULT_APP_SETTINGS.ipv6Enabled,
       udpEnabled: DEFAULT_APP_SETTINGS.udpEnabled,
       autoRefreshSubscriptionOnConnect: DEFAULT_APP_SETTINGS.autoRefreshSubscriptionOnConnect,
-      autoStart: DEFAULT_APP_SETTINGS.autoStart,
       logLevel: DEFAULT_APP_SETTINGS.logLevel
     };
   }

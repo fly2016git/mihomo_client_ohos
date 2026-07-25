@@ -36,8 +36,8 @@ interface PocNativeApi {
   isMihomoRunning(): PocStatus;
   gracefulStopMihomo(): Promise<PocStatus>;
 
-  // M2-3 placeholder: native bridge is not implemented yet.
   selectProxy(group: string, node: string): Promise<PocStatus>;
+  validateMihomoConfig(content: string): Promise<string>;
   testMihomoProxyDelay(node: string, url: string, timeoutMs: number): Promise<string>;
   testMihomoGroupDelay(group: string, url: string, timeoutMs: number): Promise<string>;
   getMihomoTrafficStats(): Promise<string>;

@@ -16,7 +16,7 @@ export OHOS_LLVM_READELF="${OHOS_LLVM_READELF:-$OHOS_NDK_HOME/llvm/bin/llvm-read
 
 export OHOS_GO="${OHOS_GO:-/private/tmp/ohos_golang_go/bin/go}"
 
-export POC_DEVICE_TARGET="${POC_DEVICE_TARGET:-192.168.3.65:41235}"
+export POC_DEVICE_TARGET="${POC_DEVICE_TARGET:-192.168.3.65:39589}"
 export POC_ENTRY_HAP="${POC_ENTRY_HAP:-entry/build/default/outputs/default/entry-default-signed.hap}"
 export POC_BUNDLE_NAME="${POC_BUNDLE_NAME:-com.example.mihomopoc}"
 export POC_ENTRY_ABILITY="${POC_ENTRY_ABILITY:-EntryAbility}"

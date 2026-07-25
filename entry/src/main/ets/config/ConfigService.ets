@@ -14,6 +14,7 @@ import {
   ProxyMode,
   ProxyNode,
   ProxySelection,
+  ProxySelectionRequestState,
   ProxySelectionState,
   ProfilesState,
   SubscriptionMeta
@@ -85,6 +86,7 @@ export class ConfigService {
       runtimePath: baseDir + '/state/runtime.json',
       settingsPath: baseDir + '/state/settings.json',
       proxySelectionPath: baseDir + '/state/proxy-selections.json',
+      proxySelectionRequestPath: baseDir + '/state/proxy-selection-request.json',
       proxyLatencyPath: baseDir + '/state/proxy-latency.json',
       trafficDailyPath: baseDir + '/state/traffic-daily.json',
       trafficStatsPath: baseDir + '/state/traffic-stats.json'
@@ -161,6 +163,18 @@ export class ConfigService {
     return this.saveRawYaml(DEFAULT_PROFILE_ID, content);
   }
 
+  forceWriteDefaultRawYamlForSmoke(content: string): ConfigValidationResult {
+    const profile = this.getProfile(DEFAULT_PROFILE_ID) ?? this.ensureDefaultProfile();
+    const validation = this.validateRawYaml(content);
+    const now = Date.now();
+    profile.updatedAt = now;
+    profile.lastValidatedAt = now;
+    profile.lastError = validation.ok ? '' : validation.errors.join('; ');
+    this.writeTextFileAtomic(profile.rawPath, content);
+    this.updateProfile(profile);
+    return validation;
+  }
+
   saveRawYaml(profileId: string, content: string): ConfigValidationResult {
     const profile = this.getProfile(profileId) ?? this.ensureDefaultProfile();
     const validation = this.validateRawYaml(content);
@@ -168,38 +182,61 @@ export class ConfigService {
     profile.updatedAt = now;
     profile.lastValidatedAt = now;
     profile.lastError = validation.ok ? '' : validation.errors.join('; ');
-    this.writeTextFile(profile.rawPath, content);
 
     if (validation.ok) {
       const runtimeYaml = this.generateRuntimeYaml(content);
-      this.writeTextFile(profile.runtimePath, runtimeYaml);
+      this.writeTextFileAtomic(profile.rawPath, content);
+      this.writeTextFileAtomic(profile.runtimePath, runtimeYaml);
     }
 
-    const state = this.loadProfilesState();
-    const nextProfiles = state.profiles.map((item: Profile) => {
-      return item.id === profile.id ? profile : item;
-    });
-    this.saveProfilesState({
-      activeProfileId: state.activeProfileId,
-      profiles: nextProfiles
-    });
+    this.updateProfile(profile);
     return validation;
   }
 
   validateRawYaml(content: string): ConfigValidationResult {
     const unsupported = this.getUnsupportedConfigKeys(content);
     const errors: string[] = [];
+    const warnings: string[] = [];
     if (content.trim().length === 0) {
       errors.push('配置不能为空');
     }
     if (unsupported.length > 0) {
       errors.push('不支持字段: ' + unsupported.join(', '));
     }
+    const proxies = this.extractProxyNodes(content, '');
+    const groups = this.extractProxyGroups(content);
+    const ruleTargets = this.extractRuleTargets(content);
+    if (proxies.length === 0) {
+      warnings.push('proxies 为空，连接后可能只能使用 DIRECT/REJECT');
+    }
+    if (this.countRulesInYaml(content) === 0) {
+      warnings.push('rules 为空，建议至少保留 MATCH 规则');
+    }
+    if (groups.length === 0) {
+      warnings.push('proxy-groups 为空，将使用默认 Proxy 分组');
+    }
+    const proxyNames = proxies.map((node: ProxyNode) => node.name);
+    for (const group of groups) {
+      if (group.nodes.length === 0) {
+        warnings.push('分组缺少节点: ' + group.name);
+      }
+      for (const node of group.nodes) {
+        if (!this.isBuiltInProxyName(node.name) && proxyNames.indexOf(node.name) < 0) {
+          warnings.push('分组引用不存在的节点: ' + group.name + ' -> ' + node.name);
+        }
+      }
+    }
+    const groupNames = groups.map((group: ProxyGroup) => group.name);
+    for (const target of ruleTargets) {
+      if (!this.isBuiltInProxyName(target) && groupNames.indexOf(target) < 0 && proxyNames.indexOf(target) < 0) {
+        warnings.push('规则引用不存在的策略或节点: ' + target);
+      }
+    }
     return {
       ok: errors.length === 0,
       unsupportedKeys: unsupported,
       errors,
-      warnings: ['MVP-01A 使用移动端安全 runtime 模板，复杂 YAML 转换将在后续版本完善。']
+      warnings: warnings.concat(['MVP-01A 使用移动端安全 runtime 模板，复杂 YAML 转换将在后续版本完善。'])
     };
   }
 
@@ -288,6 +325,22 @@ export class ConfigService {
     return profile;
   }
 
+  saveSubscriptionProfile(name: string, url: string, content: string): Profile {
+    const validation = this.validateRawYaml(content);
+    if (!validation.ok) {
+      throw new Error('CONFIG_INVALID: ' + validation.errors.join('; '));
+    }
+    const profile = this.createSubscriptionProfile(name, url);
+    const now = Date.now();
+    profile.lastValidatedAt = now;
+    profile.updatedAt = now;
+    profile.lastError = '';
+    this.writeTextFileAtomic(profile.rawPath, content);
+    this.writeTextFileAtomic(profile.runtimePath, this.generateRuntimeYaml(content));
+    this.updateProfile(profile);
+    return profile;
+  }
+
   createLocalProfile(name: string, content: string): Profile {
     const layout = this.ensureLayout();
     const state = this.loadProfilesState();
@@ -308,9 +361,12 @@ export class ConfigService {
       lastError: ''
     };
     const validation = this.validateRawYaml(content);
+    if (!validation.ok) {
+      throw new Error('CONFIG_INVALID: ' + validation.errors.join('; '));
+    }
     profile.lastError = validation.ok ? '' : validation.errors.join('; ');
-    this.writeTextFile(profile.rawPath, content);
-    this.writeTextFile(profile.runtimePath, validation.ok ? this.generateRuntimeYaml(content) : DEFAULT_RUNTIME_CONFIG);
+    this.writeTextFileAtomic(profile.rawPath, content);
+    this.writeTextFileAtomic(profile.runtimePath, this.generateRuntimeYaml(content));
     state.profiles.push(profile);
     this.saveProfilesState(state);
     return profile;
@@ -386,6 +442,9 @@ export class ConfigService {
     if (profileId === DEFAULT_PROFILE_ID || state.profiles.length <= 1) {
       return false;
     }
+    if (state.activeProfileId === profileId) {
+      return false;
+    }
 
     const profile = this.findProfile(state, profileId);
     if (!profile) {
@@ -397,10 +456,6 @@ export class ConfigService {
       return false;
     }
 
-    if (state.activeProfileId === profileId) {
-      remaining[0].active = true;
-      state.activeProfileId = remaining[0].id;
-    }
     for (const item of remaining) {
       if (item.id !== state.activeProfileId) {
         item.active = false;
@@ -410,7 +465,22 @@ export class ConfigService {
     this.saveProfilesState(state);
     this.deleteIfExists(profile.rawPath);
     this.deleteIfExists(profile.runtimePath);
+    const selections = this.loadProxySelectionState().selections.filter((item: ProxySelection) => {
+      return item.profileId !== profileId;
+    });
+    this.saveProxySelectionState({ selections });
     return true;
+  }
+
+  updateProfile(profile: Profile): void {
+    const state = this.loadProfilesState();
+    const nextProfiles = state.profiles.map((item: Profile) => {
+      return item.id === profile.id ? profile : item;
+    });
+    this.saveProfilesState({
+      activeProfileId: state.activeProfileId,
+      profiles: nextProfiles
+    });
   }
 
   listProxyNodes(profileId: string = ''): ProxyNode[] {
@@ -465,6 +535,85 @@ export class ConfigService {
     });
     this.saveProxySelectionState({ selections: rest.concat([next]) });
     return true;
+  }
+
+  listProxySelections(profileId: string = ''): ProxySelection[] {
+    const targetId = profileId.length > 0 ? profileId : this.getActiveProfile().id;
+    return this.loadProxySelectionState().selections.filter((item: ProxySelection) => {
+      return item.profileId === targetId;
+    });
+  }
+
+  loadProxySelectionRequestState(): ProxySelectionRequestState {
+    const layout = this.ensureLayout();
+    if (!this.pathExists(layout.proxySelectionRequestPath)) {
+      return this.createEmptyProxySelectionRequestState();
+    }
+    try {
+      const parsed = JSON.parse(fs.readTextSync(layout.proxySelectionRequestPath)) as ProxySelectionRequestState;
+      return {
+        requestId: parsed.requestId ? parsed.requestId : '',
+        profileId: parsed.profileId ? parsed.profileId : '',
+        groupName: parsed.groupName ? parsed.groupName : '',
+        nodeName: parsed.nodeName ? parsed.nodeName : '',
+        status: parsed.status === 'running' || parsed.status === 'complete' || parsed.status === 'error' ?
+          parsed.status : 'idle',
+        updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
+        error: parsed.error ? parsed.error : ''
+      };
+    } catch (_) {
+      return this.createEmptyProxySelectionRequestState();
+    }
+  }
+
+  saveProxySelectionRequestState(state: ProxySelectionRequestState): void {
+    const layout = this.ensureLayout();
+    this.writeTextFileAtomic(layout.proxySelectionRequestPath, JSON.stringify(state));
+  }
+
+  clearGeneratedCache(): number {
+    const layout = this.ensureLayout();
+    const paths: string[] = [
+      layout.proxyLatencyPath,
+      layout.trafficStatsPath,
+      layout.homeDir + '/cache.db',
+      layout.homeDir + '/cache.db-shm',
+      layout.homeDir + '/cache.db-wal'
+    ];
+    let cleared = 0;
+    for (const path of paths) {
+      if (this.pathExists(path)) {
+        this.deleteIfExists(path);
+        if (!this.pathExists(path)) {
+          cleared += 1;
+        }
+      }
+    }
+    return cleared;
+  }
+
+  resetAllConfiguration(): Profile {
+    const layout = this.ensureLayout();
+    const state = this.loadProfilesState();
+    for (const profile of state.profiles) {
+      this.deleteIfExists(profile.rawPath);
+      this.deleteIfExists(profile.runtimePath);
+    }
+    const stateFiles: string[] = [
+      layout.profilesPath,
+      layout.runtimePath,
+      layout.settingsPath,
+      layout.proxySelectionPath,
+      layout.proxySelectionRequestPath,
+      layout.proxyLatencyPath,
+      layout.trafficDailyPath,
+      layout.trafficStatsPath
+    ];
+    for (const path of stateFiles) {
+      this.deleteIfExists(path);
+    }
+    this.clearGeneratedCache();
+    return this.ensureDefaultProfile();
   }
 
   countRules(profileId: string = ''): number {
@@ -649,7 +798,6 @@ export class ConfigService {
         udpEnabled: typeof parsed.udpEnabled === 'boolean' ? parsed.udpEnabled : DEFAULT_APP_SETTINGS.udpEnabled,
         autoRefreshSubscriptionOnConnect: typeof parsed.autoRefreshSubscriptionOnConnect === 'boolean' ?
           parsed.autoRefreshSubscriptionOnConnect : DEFAULT_APP_SETTINGS.autoRefreshSubscriptionOnConnect,
-        autoStart: typeof parsed.autoStart === 'boolean' ? parsed.autoStart : DEFAULT_APP_SETTINGS.autoStart,
         logLevel: this.safeLogLevel(parsed.logLevel ?? DEFAULT_APP_SETTINGS.logLevel)
       };
     } catch (_) {
@@ -892,6 +1040,18 @@ export class ConfigService {
     };
   }
 
+  private createEmptyProxySelectionRequestState(): ProxySelectionRequestState {
+    return {
+      requestId: '',
+      profileId: '',
+      groupName: '',
+      nodeName: '',
+      status: 'idle',
+      updatedAt: 0,
+      error: ''
+    };
+  }
+
   private saveProxySelectionState(state: ProxySelectionState): void {
     const layout = this.ensureLayout();
     this.writeTextFileAtomic(layout.proxySelectionPath, JSON.stringify(state));
@@ -1002,8 +1162,8 @@ export class ConfigService {
     const upper = name.toUpperCase();
     return {
       name,
-      type: upper === 'DIRECT' || upper === 'REJECT' ? 'builtin' : 'proxy',
-      server: upper === 'DIRECT' || upper === 'REJECT' ? upper : '',
+      type: this.isBuiltInProxyName(name) ? 'builtin' : 'proxy',
+      server: this.isBuiltInProxyName(name) ? upper : '',
       port: '',
       group: groupName,
       selected: false,
@@ -1080,6 +1240,50 @@ export class ConfigService {
       next = next.substring(1, next.length - 1);
     }
     return next;
+  }
+
+  private isBuiltInProxyName(name: string): boolean {
+    const upper = name.toUpperCase();
+    return upper === 'DIRECT' || upper === 'REJECT' || upper === 'REJECT-DROP' || upper === 'PASS';
+  }
+
+  private extractRuleTargets(yaml: string): string[] {
+    const targets: string[] = [];
+    const lines = yaml.split('\n');
+    let collecting = false;
+    for (const rawLine of lines) {
+      if (!collecting) {
+        const trimmed = rawLine.trim();
+        if (trimmed === 'rules:' || trimmed.startsWith('rules: ')) {
+          collecting = true;
+          if (trimmed.startsWith('rules: [') && trimmed.indexOf(']') > trimmed.indexOf('[')) {
+            const inline = trimmed.substring(trimmed.indexOf('[') + 1, trimmed.indexOf(']')).trim();
+            this.appendRuleTarget(targets, inline);
+            return targets;
+          }
+        }
+        continue;
+      }
+      if (this.isTopLevelContentLine(rawLine)) {
+        break;
+      }
+      const trimmed = rawLine.trim();
+      if (trimmed.startsWith('- ')) {
+        this.appendRuleTarget(targets, trimmed.substring(2).trim());
+      }
+    }
+    return targets;
+  }
+
+  private appendRuleTarget(targets: string[], rule: string): void {
+    const parts = rule.split(',').map((part: string) => this.cleanYamlScalar(part));
+    if (parts.length < 2) {
+      return;
+    }
+    const target = parts[parts.length - 1];
+    if (target.length > 0 && targets.indexOf(target) < 0) {
+      targets.push(target);
+    }
   }
 
   private pushProxyNode(nodes: ProxyNode[], node: ProxyNode | null): void {

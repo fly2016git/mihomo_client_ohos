@@ -1,9 +1,14 @@
 import { common } from '@kit.AbilityKit';
+import { picker } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { scanBarcode } from '@kit.ScanKit';
+import fs from '@ohos.file.fs';
 import pasteboard from '@ohos.pasteboard';
 import { ConfigService } from '../config/ConfigService';
+import { ConfigValidationService } from '../config/ConfigValidationService';
 import {
   AppSettings,
+  ConfigValidationResult,
   DEFAULT_APP_SETTINGS,
   DnsMode,
   LogLevel,
@@ -13,6 +18,7 @@ import {
   ProxyLatencyState,
   ProxyMode,
   ProxyNode,
+  ProxySelectionRequestState,
   RuntimeEvent,
   RuntimeEventLevel,
   RuntimeSnapshot,
@@ -20,6 +26,7 @@ import {
   VpnRouteMode
 } from '../models/MvpTypes';
 import { RuntimeStore } from '../runtime/RuntimeStore';
+import { TrafficStatsService } from '../runtime/TrafficStatsService';
 import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { UiRefreshBus } from '../runtime/UiRefreshBus';
@@ -74,6 +81,7 @@ struct Index {
   @State renderTick: number = 0;
 
   private configService?: ConfigService;
+  private configValidationService?: ConfigValidationService;
   private runtimeStore?: RuntimeStore;
   private vpnControlService?: VpnControlService;
   private subscriptionService?: SubscriptionService;
@@ -84,24 +92,29 @@ struct Index {
   private logsScroller: Scroller = new Scroller();
   private pollTimer: number = -1;
   private profileRefreshTick: number = 0;
+  private loadedYamlProfileId: string = '';
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
     this.uiContext = context;
     const filesDir = context.filesDir;
     this.configService = new ConfigService(filesDir);
+    this.configValidationService = new ConfigValidationService(filesDir);
     this.runtimeStore = new RuntimeStore(filesDir);
     this.vpnControlService = new VpnControlService(filesDir, context);
     this.subscriptionService = new SubscriptionService(filesDir);
     this.settingsService = new SettingsService(filesDir);
     this.bindRuntimeRefreshEvent(context);
     this.bindRuntimeRefreshBus();
-    const profile = this.configService.ensureDefaultProfile();
+    this.configService.ensureDefaultProfile();
+    const profile = this.configService.getActiveProfile();
     this.activeProfileId = profile.id;
     this.rawYaml = this.configService.loadRawYaml(profile.id);
+    this.loadedYamlProfileId = profile.id;
     this.loadSettings();
     this.reloadProfiles();
     this.markRestoredRuntimeUnknown();
+    this.refreshDailyTraffic();
     this.refreshState(true);
     this.startRuntimePolling();
   }
@@ -113,6 +126,7 @@ struct Index {
   }
 
   onPageShow(): void {
+    this.refreshDailyTraffic();
     this.refreshRuntimeView(true);
     this.startRuntimePolling();
   }
@@ -290,8 +304,6 @@ struct Index {
   private applySnapshot(snapshot: RuntimeSnapshot): void {
     this.statusText = this.toDisplayState(snapshot.runtimeState);
     this.coreText = this.toDisplayState(snapshot.coreState);
-    this.activeProfileId = snapshot.activeProfileId;
-    this.activeProfileName = snapshot.activeProfileName || this.activeProfileName || 'Default';
     this.lastError = snapshot.lastError;
     this.uploadSpeed = snapshot.uploadSpeed;
     this.downloadSpeed = snapshot.downloadSpeed;
@@ -303,15 +315,25 @@ struct Index {
     }
   }
 
-  private saveConfig(): void {
-    if (!this.configService || !this.runtimeStore) {
+  private async saveConfig(): Promise<void> {
+    if (!this.configService || !this.configValidationService || !this.runtimeStore) {
       return;
     }
     try {
-      const targetId = this.editProfileId.length > 0 ? this.editProfileId : this.activeProfileId;
+      const targetId = this.editProfileId.length > 0 ? this.editProfileId : this.loadedYamlProfileId;
+      if (targetId.length === 0) {
+        this.validationText = '保存失败: 编辑器未绑定配置';
+        return;
+      }
+      const strictValidation = await this.configValidationService.validate(this.rawYaml);
+      if (!strictValidation.ok) {
+        this.validationText = strictValidation.errors.join('; ');
+        this.runtimeStore.appendEvent('Config rejected: ' + this.validationText);
+        return;
+      }
       const result = this.configService.saveRawYaml(targetId, this.rawYaml);
       if (result.ok) {
-        this.validationText = '配置已保存';
+        this.validationText = '配置已保存 · ' + this.validationSummary(result);
         this.runtimeStore.appendEvent('Config saved');
       } else {
         this.validationText = result.errors.join('; ');
@@ -324,14 +346,18 @@ struct Index {
     }
   }
 
-  private validateConfig(): void {
-    if (!this.configService || !this.runtimeStore) {
+  private async validateConfig(): Promise<void> {
+    if (!this.configValidationService || !this.runtimeStore) {
       return;
     }
-    const result = this.configService.validateRawYaml(this.rawYaml);
-    this.validationText = result.ok ? '配置校验通过' : result.errors.join('; ');
-    this.runtimeStore.appendEvent(result.ok ? 'Config validation ok' : 'Config validation failed');
-    this.refreshState();
+    try {
+      const result = await this.configValidationService.validate(this.rawYaml);
+      this.validationText = this.validationSummary(result);
+      this.runtimeStore.appendEvent(result.ok ? 'Config validation ok' : 'Config validation failed');
+      this.refreshState();
+    } catch (err) {
+      this.validationText = '校验失败: ' + this.toErrorText(err);
+    }
   }
 
   private async connect(): Promise<void> {
@@ -408,6 +434,12 @@ struct Index {
   }
 
   private selectSection(index: number): void {
+    if (index === 2 && this.configService) {
+      this.editProfileId = '';
+      const active = this.configService.getActiveProfile();
+      this.rawYaml = this.configService.loadRawYaml(active.id);
+      this.loadedYamlProfileId = active.id;
+    }
     this.selectedSectionIndex = index;
     this.sheetVisible = false;
     if (index === 0 || index === 1 || index === 2) {
@@ -577,11 +609,17 @@ struct Index {
     this.subBusy = true;
     try {
       const name = this.newProfileName.trim().length > 0 ? this.newProfileName.trim() : '新配置';
-      const profile = await this.subscriptionService.addSubscription(name, this.subUrl);
-      const result = await this.subscriptionService.update(profile.id);
+      const created = await this.subscriptionService.addSubscriptionAndUpdate(name, this.subUrl);
+      if (!created.profile || !created.result.ok) {
+        this.subStatus = '添加失败: ' + created.result.error;
+        return;
+      }
+      const profile = created.profile;
+      const result = created.result;
       this.configService.setActiveProfile(profile.id);
-      this.subStatus = result.ok ? '配置已创建并更新' : '配置已创建，更新失败: ' + result.error;
+      this.subStatus = '配置已创建并更新: ' + result.bytes.toString() + 'B';
       this.rawYaml = this.configService.loadRawYaml(profile.id);
+      this.loadedYamlProfileId = profile.id;
       this.reloadProfiles();
       this.selectSection(2);
       hilog.info(DOMAIN, TAG, 'Subscription added id=%{public}s', profile.id);
@@ -593,16 +631,68 @@ struct Index {
     }
   }
 
-  private createLocalProfile(): void {
-    if (!this.configService) {
+  private async createLocalProfile(): Promise<void> {
+    if (!this.configService || !this.configValidationService) {
       return;
     }
-    const name = this.newProfileName.trim().length > 0 ? this.newProfileName.trim() : '新配置';
-    const profile = this.configService.createLocalProfile(name, this.rawYaml);
-    this.configService.setActiveProfile(profile.id);
-    this.subStatus = '本地配置已创建';
-    this.reloadProfiles();
-    this.selectSection(2);
+    try {
+      const name = this.newProfileName.trim().length > 0 ? this.newProfileName.trim() : '新配置';
+      const validation = await this.configValidationService.validate(this.rawYaml);
+      if (!validation.ok) {
+        this.subStatus = '创建失败: ' + validation.errors.join('; ');
+        return;
+      }
+      const profile = this.configService.createLocalProfile(name, this.rawYaml);
+      this.configService.setActiveProfile(profile.id);
+      this.loadedYamlProfileId = profile.id;
+      this.subStatus = '本地配置已创建';
+      this.reloadProfiles();
+      this.selectSection(2);
+    } catch (err) {
+      this.subStatus = '创建失败: ' + this.toErrorText(err);
+    }
+  }
+
+  private async importLocalProfileFromFile(): Promise<void> {
+    if (!this.configService || !this.configValidationService) {
+      return;
+    }
+    this.subBusy = true;
+    try {
+      const documentPicker = new picker.DocumentViewPicker(getContext(this));
+      const uris = await documentPicker.select({
+        maxSelectNumber: 1,
+        fileSuffixFilters: ['YAML|.yaml,.yml', 'Text|.txt']
+      });
+      if (!uris || uris.length === 0) {
+        this.subStatus = '已取消文件导入';
+        return;
+      }
+      const uri = uris[0];
+      if (!this.isSupportedImportFile(uri)) {
+        this.subStatus = '导入失败: 仅支持 .yaml/.yml/.txt';
+        return;
+      }
+      const content = this.readTextFileUri(uri);
+      const validation = await this.configValidationService.validate(content);
+      if (!validation.ok) {
+        this.subStatus = '导入失败: ' + validation.errors.join('; ');
+        return;
+      }
+      const name = this.newProfileName.trim().length > 0 ? this.newProfileName.trim() : this.importNameFromUri(uri);
+      const profile = this.configService.createLocalProfile(name, content);
+      this.configService.setActiveProfile(profile.id);
+      this.rawYaml = content;
+      this.loadedYamlProfileId = profile.id;
+      this.validationText = this.validationSummary(validation);
+      this.subStatus = '文件已导入: ' + profile.name;
+      this.reloadProfiles();
+      this.selectSection(2);
+    } catch (err) {
+      this.subStatus = '导入异常: ' + this.toErrorText(err);
+    } finally {
+      this.subBusy = false;
+    }
   }
 
   private async refreshSubscription(profileId: string = ''): Promise<void> {
@@ -621,6 +711,7 @@ struct Index {
         '更新失败: ' + result.error;
       if (profile.active) {
         this.rawYaml = this.configService.loadRawYaml(profile.id);
+        this.loadedYamlProfileId = profile.id;
       }
       this.reloadProfiles();
       this.refreshState();
@@ -631,15 +722,15 @@ struct Index {
     }
   }
 
-  private refreshActiveConfig(): void {
+  private async refreshActiveConfig(): Promise<void> {
     const profile = this.getActiveProfileFromState();
     if (profile && profile.type === 'subscription') {
       this.refreshSubscription(profile.id);
       return;
     }
-    if (this.configService) {
-      const result = this.configService.validateRawYaml(this.configService.loadRawYaml(this.activeProfileId));
-      this.subStatus = result.ok ? '本地配置已校验' : result.errors.join('; ');
+    if (this.configService && this.configValidationService) {
+      const result = await this.configValidationService.validate(this.configService.loadRawYaml(this.activeProfileId));
+      this.subStatus = this.validationSummary(result);
       this.reloadProfiles();
     }
   }
@@ -651,7 +742,18 @@ struct Index {
     const profile = this.configService.setActiveProfile(profileId);
     if (profile) {
       this.rawYaml = this.configService.loadRawYaml(profileId);
+      this.loadedYamlProfileId = profileId;
       this.subStatus = '已切换到: ' + profile.name;
+      if (this.runtimeStore) {
+        const snapshot = this.runtimeStore.getSnapshot();
+        if (snapshot.runtimeState === 'idle' || snapshot.runtimeState === 'error' || snapshot.runtimeState === 'unknown') {
+          this.runtimeStore.update({
+            activeProfileId: profile.id,
+            activeProfileName: profile.name
+          });
+        }
+        this.runtimeStore.appendEvent('Active profile changed to ' + profile.name, 'info', 'config');
+      }
       this.reloadProfiles();
       this.refreshState();
     }
@@ -691,6 +793,7 @@ struct Index {
     }
     this.editProfileId = profileId;
     this.rawYaml = this.configService.loadRawYaml(profileId);
+    this.loadedYamlProfileId = profileId;
     this.closeProfileActions();
     this.selectSection(8);
   }
@@ -709,24 +812,172 @@ struct Index {
     if (!this.configService) {
       return;
     }
+    if (profileId === this.activeProfileId) {
+      this.subStatus = '当前使用中的配置不能删除，请先切换到其他配置';
+      this.closeProfileActions();
+      return;
+    }
     const ok = this.configService.deleteProfile(profileId);
-    this.subStatus = ok ? '配置已删除' : '默认配置或最后一个配置不能删除';
+    this.subStatus = ok ? '配置已删除' : '默认配置、当前配置或最后一个配置不能删除';
     this.closeProfileActions();
     this.reloadProfiles();
   }
 
+  private confirmDeleteProfile(profileId: string): void {
+    const profile = this.getProfileById(profileId);
+    const profileName = profile ? profile.name : profileId;
+    this.closeProfileActions();
+    AlertDialog.show({
+      title: '删除配置',
+      message: '确定删除“' + profileName + '”吗？此操作无法撤销。',
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        action: () => {
+          this.deleteProfile(profileId);
+        }
+      },
+      cancel: () => {
+      }
+    });
+  }
+
+  private canChangeStoredData(): boolean {
+    return this.statusText !== 'Connected' && this.statusText !== 'Starting' && this.statusText !== 'Stopping';
+  }
+
+  private confirmClearCache(): void {
+    if (!this.canChangeStoredData()) {
+      this.validationText = '请先断开 VPN 再清理缓存';
+      return;
+    }
+    AlertDialog.show({
+      title: '清理缓存',
+      message: '将清除延迟测试结果、临时流量文件和 mihomo 缓存，不会删除配置或今日流量。',
+      primaryButton: { value: '取消', action: () => {
+      } },
+      secondaryButton: { value: '清理', action: () => {
+        if (this.configService) {
+          const count = this.configService.clearGeneratedCache();
+          this.proxyDelayRecords = [];
+          this.validationText = '缓存已清理，共 ' + count.toString() + ' 项';
+          this.reloadProfiles();
+        }
+      } },
+      cancel: () => {
+      }
+    });
+  }
+
+  private confirmResetAllConfiguration(): void {
+    if (!this.canChangeStoredData()) {
+      this.validationText = '请先断开 VPN 再重置配置';
+      return;
+    }
+    AlertDialog.show({
+      title: '重置全部配置',
+      message: '所有本地配置、订阅、设置、节点选择和流量记录都将被删除。此操作无法撤销。',
+      primaryButton: { value: '取消', action: () => {
+      } },
+      secondaryButton: { value: '全部重置', action: () => {
+        if (!this.configService || !this.settingsService || !this.runtimeStore) {
+          return;
+        }
+        const profile = this.configService.resetAllConfiguration();
+        this.appSettings = this.settingsService.load();
+        this.activeProfileId = profile.id;
+        this.activeProfileName = profile.name;
+        this.rawYaml = this.configService.loadRawYaml(profile.id);
+        this.loadedYamlProfileId = profile.id;
+        this.editProfileId = '';
+        this.runtimeStore.resetToIdle('All configuration reset');
+        this.validationText = '全部配置已重置';
+        this.subStatus = '';
+        this.reloadProfiles();
+        this.refreshState(true);
+      } },
+      cancel: () => {
+      }
+    });
+  }
+
   private canDeleteProfile(profileId: string): boolean {
-    return profileId !== 'default' && this.profiles.length > 1;
+    return profileId !== 'default' && profileId !== this.activeProfileId && this.profiles.length > 1;
   }
 
   private createModeSubtitle(): string {
     if (this.createMode === 0) {
-      return '文件导入能力待接入系统文件选择器';
+      return '支持 .yaml / .yml / .txt，校验通过后才保存';
     }
     if (this.createMode === 2) {
-      return '二维码扫描能力待接入相机权限';
+      return '扫描包含 http/https 订阅地址的二维码';
     }
     return '从 URL 导入订阅配置';
+  }
+
+  private validationSummary(result: ConfigValidationResult): string {
+    if (!result.ok) {
+      return result.errors.join('; ');
+    }
+    const warnings = result.warnings.filter((item: string) => item.indexOf('MVP-01A') < 0);
+    if (warnings.length > 0) {
+      return '校验通过，警告: ' + warnings.join('; ');
+    }
+    return '校验通过';
+  }
+
+  private isSupportedImportFile(uri: string): boolean {
+    const lower = uri.toLowerCase();
+    return lower.endsWith('.yaml') || lower.endsWith('.yml') || lower.endsWith('.txt');
+  }
+
+  private importNameFromUri(uri: string): string {
+    const plain = decodeURIComponent(uri);
+    const slash = plain.lastIndexOf('/');
+    const fileName = slash >= 0 ? plain.substring(slash + 1) : plain;
+    const dot = fileName.lastIndexOf('.');
+    const base = dot > 0 ? fileName.substring(0, dot) : fileName;
+    return base.length > 0 ? base : '文件导入配置';
+  }
+
+  private readTextFileUri(uri: string): string {
+    const text = fs.readTextSync(uri);
+    if (text.length > 5 * 1024 * 1024) {
+      throw new Error('CONFIG_TOO_LARGE: 文件超过 5 MiB');
+    }
+    return text;
+  }
+
+  private async scanAndCreateSubscription(): Promise<void> {
+    if (!this.uiContext || this.subBusy) {
+      return;
+    }
+    this.subBusy = true;
+    try {
+      const result = await scanBarcode.startScanForResult(this.uiContext);
+      const value = result.originalValue.trim();
+      if (!this.isHttpSubscriptionUrl(value)) {
+        this.subStatus = '识别失败: 二维码不是 http/https 订阅地址';
+        return;
+      }
+      this.subUrl = value;
+      this.subStatus = '已识别订阅地址，正在创建';
+    } catch (err) {
+      this.subStatus = '扫码已取消或失败: ' + this.toErrorText(err);
+      return;
+    } finally {
+      this.subBusy = false;
+    }
+    await this.addSubscription();
+  }
+
+  private isHttpSubscriptionUrl(value: string): boolean {
+    const lower = value.toLowerCase();
+    return lower.startsWith('https://') || lower.startsWith('http://');
   }
 
   private isTabletLayout(): boolean {
@@ -919,6 +1170,20 @@ struct Index {
       await this.sleep(500);
     }
     throw new Error('latency test timeout');
+  }
+
+  private async waitProxySelectionResult(requestId: string, timeoutMs: number): Promise<ProxySelectionRequestState> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (this.configService) {
+        const state = this.configService.loadProxySelectionRequestState();
+        if (state.requestId === requestId && (state.status === 'complete' || state.status === 'error')) {
+          return state;
+        }
+      }
+      await this.sleep(200);
+    }
+    throw new Error('节点切换超时');
   }
 
   private async sleep(ms: number): Promise<void> {
@@ -1135,23 +1400,53 @@ struct Index {
     return this.runtimeStore.getPocSmokeSummary();
   }
 
-  private selectProxyNode(node: ProxyNode): void {
-    if (!this.configService || !this.runtimeStore) {
+  private async selectProxyNode(node: ProxyNode): Promise<void> {
+    if (!this.configService || !this.runtimeStore || !this.vpnControlService) {
       return;
     }
-    const ok = this.configService.selectLocalProxy(node.group, node.name, this.activeProfileId);
-    if (!ok) {
-      this.validationText = '节点选择失败';
-      this.runtimeStore.appendEvent('Proxy select failed group=' + node.group + ' node=' + node.name);
+    const snapshot = this.runtimeStore.getSnapshot();
+    if (snapshot.runtimeState === 'starting' || snapshot.runtimeState === 'stopping') {
+      this.validationText = '连接状态切换中，请稍后选择节点';
       return;
     }
-    const running = this.statusText === 'Connected' || this.statusText === 'Starting' || this.coreText === 'Running';
-    this.validationText = running ? '节点选择已保存，重连后生效' : '节点选择已保存';
-    this.runtimeStore.appendEvent(running ?
-      'Proxy selected locally; reconnect required group=' + node.group + ' node=' + node.name :
-      'Proxy selected locally group=' + node.group + ' node=' + node.name);
-    this.reloadProfiles();
-    this.refreshState();
+    if (snapshot.runtimeState !== 'connected' || snapshot.coreState !== 'running') {
+      const ok = this.configService.selectLocalProxy(node.group, node.name, this.activeProfileId);
+      this.validationText = ok ? '节点选择已保存，将在连接时应用' : '节点选择失败';
+      this.runtimeStore.appendEvent(ok ?
+        'Proxy selected for next connection group=' + node.group + ' node=' + node.name :
+        'Proxy select failed group=' + node.group + ' node=' + node.name);
+      if (ok) {
+        this.reloadProfiles();
+        this.refreshState();
+      }
+      return;
+    }
+
+    this.validationText = '正在切换节点';
+    try {
+      const requestId = 'select-' + Date.now().toString();
+      await this.vpnControlService.requestProxySelection(requestId, this.activeProfileId, node.group, node.name);
+      const result = await this.waitProxySelectionResult(requestId, 10000);
+      if (result.status !== 'complete') {
+        throw new Error(result.error.length > 0 ? result.error : '节点切换失败');
+      }
+      this.validationText = '节点已切换';
+      this.reloadProfiles();
+      this.refreshState();
+    } catch (err) {
+      this.validationText = '节点切换失败: ' + this.toErrorText(err);
+    }
+  }
+
+  private refreshDailyTraffic(): void {
+    if (!this.uiContext) {
+      return;
+    }
+    try {
+      new TrafficStatsService(this.uiContext.filesDir).refreshDailySnapshot();
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, 'daily traffic refresh failed: %{public}s', this.toErrorText(err));
+    }
   }
 
   private cycleRouteMode(): void {
@@ -1235,9 +1530,6 @@ struct Index {
     if (key === 'autoRefresh') {
       return this.appSettings.autoRefreshSubscriptionOnConnect;
     }
-    if (key === 'autoStart') {
-      return this.appSettings.autoStart;
-    }
     return false;
   }
 
@@ -1255,9 +1547,6 @@ struct Index {
         autoRefreshSubscriptionOnConnect: !this.appSettings.autoRefreshSubscriptionOnConnect
       });
       return;
-    }
-    if (key === 'autoStart') {
-      this.updateSettings({ autoStart: !this.appSettings.autoStart });
     }
   }
 
@@ -2130,8 +2419,9 @@ struct Index {
           .fontColor(this.secondaryText())
           .backgroundColor(this.elevatedBg())
           .borderRadius(10)
+          .enabled(!this.subBusy)
           .onClick(() => {
-            this.subStatus = '文件导入能力待接入系统文件选择器';
+            this.importLocalProfileFromFile();
           })
         Button('保存配置')
           .height(42)
@@ -2209,16 +2499,52 @@ struct Index {
                 this.addSubscription();
               })
           } else if (this.createMode === 0) {
-            Button('创建空白本地配置')
+            TextInput({ text: this.newProfileName, placeholder: '配置名称' })
+              .height(44)
+              .width('100%')
+              .fontSize(13)
+              .fontColor(this.primaryText())
+              .placeholderColor(this.mutedText())
+              .backgroundColor(this.inputBg())
+              .borderRadius(10)
+              .onChange((value: string) => {
+                this.newProfileName = value;
+              })
+
+            Button('选择文件并导入')
               .height(44)
               .width('100%')
               .fontSize(14)
               .fontColor('#042F2E')
-              .backgroundColor(this.accentColor())
+              .backgroundColor(this.subBusy ? '#31514F' : this.accentColor())
               .borderRadius(10)
+              .enabled(!this.subBusy)
               .onClick(() => {
-                this.rawYaml = 'mode: rule\nlog-level: info\nproxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n';
-                this.createLocalProfile();
+                this.importLocalProfileFromFile();
+              })
+          } else if (this.createMode === 2) {
+            TextInput({ text: this.newProfileName, placeholder: '配置名称' })
+              .height(44)
+              .width('100%')
+              .fontSize(13)
+              .fontColor(this.primaryText())
+              .placeholderColor(this.mutedText())
+              .backgroundColor(this.inputBg())
+              .borderRadius(10)
+              .onChange((value: string) => {
+                this.newProfileName = value;
+              })
+
+            Button('扫码并创建')
+              .height(44)
+              .width('100%')
+              .fontSize(14)
+              .fontColor('#042F2E')
+              .backgroundColor(this.subBusy ? '#31514F' : this.accentColor())
+              .borderRadius(10)
+              .enabled(!this.subBusy)
+              .onClick(() => {
+                this.scanAndCreateSubscription();
               })
           }
 
@@ -2423,11 +2749,24 @@ struct Index {
         this.ToggleSettingRow('IPv6', '写入 runtime YAML，并传入 VPN 配置', 'ipv6')
         this.ToggleSettingRow('UDP 转发', '保存到连接设置，用于后续 native UDP 策略', 'udp')
         this.ToggleSettingRow('连接前自动更新订阅', '失败时沿用上一次可用 runtime', 'autoRefresh')
-        this.ToggleSettingRow('开机自启', '设置已持久化，系统自启能力后续接入', 'autoStart')
         this.SettingsGroup('诊断')
-        this.SettingsRow('Runtime', this.statusText + ' / Core: ' + this.coreText, '查看')
+        this.SettingsActionRow('Runtime', this.statusText + ' / Core: ' + this.coreText, '查看', () => {
+          this.selectSection(9);
+        })
         this.SettingsRow('VPN DNS', '传给 VPN Extension 的 DNS 地址', this.appSettings.vpnDnsAddress)
-        this.SettingsRow('FlowGuard', 'v0.1 · MVP-01', '关于')
+        this.SettingsActionRow('帮助', '配置、连接与诊断说明', '查看', () => {
+          this.selectSection(6);
+        })
+        this.SettingsActionRow('FlowGuard', 'v0.1 · MVP-01', '关于', () => {
+          this.selectSection(7);
+        })
+        this.SettingsGroup('存储')
+        this.SettingsActionRow('清理缓存', '保留配置和今日流量', '清理', () => {
+          this.confirmClearCache();
+        })
+        this.SettingsActionRow('重置全部配置', '删除配置、订阅、设置与记录', '重置', () => {
+          this.confirmResetAllConfiguration();
+        })
       }
       .width('100%')
       .padding({ left: 20, right: 20, bottom: 28 })
@@ -2574,6 +2913,22 @@ struct Index {
     .padding({ left: 12, right: 12 })
     .backgroundColor(this.surfaceBg())
     .borderRadius(12)
+  }
+
+  @Builder SettingsActionRow(title: string, subtitle: string, value: string, action: () => void) {
+    Row({ space: 12 }) {
+      this.SettingsRowText(title, subtitle)
+      Text(value)
+        .fontSize(12)
+        .fontColor(title === '重置全部配置' ? this.dangerColor() : this.accentColor())
+        .maxLines(1)
+    }
+    .height(62)
+    .width('100%')
+    .padding({ left: 12, right: 12 })
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
+    .onClick(action)
   }
 
   @Builder DiagnosticsPage() {
@@ -2729,7 +3084,7 @@ struct Index {
         })
         this.SheetActionRow('删除', this.canDeleteProfile(this.sheetProfileId) ? this.dangerColor() : this.mutedText(), () => {
           if (this.canDeleteProfile(this.sheetProfileId)) {
-            this.deleteProfile(this.sheetProfileId);
+            this.confirmDeleteProfile(this.sheetProfileId);
           }
         })
       }
