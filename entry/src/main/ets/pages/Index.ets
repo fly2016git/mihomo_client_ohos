@@ -44,7 +44,6 @@ struct Index {
   @State activeProfileId: string = '';
   @State lastError: string = '';
   @State rawYaml: string = '';
-  @State events: string[] = [];
   @State runtimeEvents: RuntimeEvent[] = [];
   @State busy: boolean = false;
   @State validationText: string = 'Ready';
@@ -266,7 +265,6 @@ struct Index {
     try {
       const snapshot = this.runtimeStore.getSnapshot();
       this.applySnapshot(snapshot);
-      this.events = this.runtimeStore.getEvents();
       this.runtimeEvents = this.runtimeStore.getRuntimeEvents();
       this.profileRefreshTick++;
       if (forceProfiles || this.profileRefreshTick >= 6) {
@@ -464,22 +462,7 @@ struct Index {
   }
 
   private statusTitleText(): string {
-    if (this.statusText === 'Connected') {
-      return '运行中';
-    }
-    if (this.statusText === 'Starting') {
-      return '启动中';
-    }
-    if (this.statusText === 'Stopping') {
-      return '停止中';
-    }
-    if (this.statusText === 'Error') {
-      return '异常';
-    }
-    if (this.statusText === 'Unknown') {
-      return '待确认';
-    }
-    return '已停止';
+    return this.runtimeStateLabel(this.statusText);
   }
 
   private statusSubtitleText(): string {
@@ -487,10 +470,10 @@ struct Index {
       return this.formatBytes(this.uploadSpeed + this.downloadSpeed) + ' 已转发';
     }
     if (this.statusText === 'Starting' || this.statusText === 'Stopping') {
-      return this.validationText;
+      return this.localizedMessage(this.validationText);
     }
     if (this.statusText === 'Error') {
-      return this.lastError.length > 0 ? this.lastError : '请查看日志';
+      return this.lastError.length > 0 ? this.localizedMessage(this.lastError) : '请查看日志';
     }
     if (this.statusText === 'Unknown') {
       return '点此重新确认或断开';
@@ -523,6 +506,13 @@ struct Index {
     return (mib / 1024).toFixed(1) + ' GiB';
   }
 
+  private formatRate(value: number): string {
+    if (value < 1024) {
+      return value.toString() + ' B/s';
+    }
+    return this.formatBytes(value) + '/s';
+  }
+
   private trafficSourceLabel(): string {
     if (this.trafficSource === 'native-mihomo') {
       return 'mihomo';
@@ -534,7 +524,21 @@ struct Index {
   }
 
   private profileTypeLabel(profile: Profile): string {
-    return profile.type === 'subscription' ? 'URL' : 'LOCAL';
+    return profile.type === 'subscription' ? '订阅' : '本地';
+  }
+
+  private profileNameLabel(profile: Profile): string {
+    if (profile.id === 'default' && profile.name === 'Default') {
+      return '默认配置';
+    }
+    return profile.name;
+  }
+
+  private activeProfileLabel(): string {
+    if (this.activeProfileId === 'default' && this.activeProfileName === 'Default') {
+      return '默认配置';
+    }
+    return this.activeProfileName;
   }
 
   private profileTrafficText(profile: Profile): string {
@@ -546,9 +550,9 @@ struct Index {
 
   private profileRuleText(profile: Profile): string {
     if (!this.configService) {
-      return '0 rules';
+      return '0 条规则';
     }
-    return this.configService.countRules(profile.id).toString() + ' rules';
+    return this.configService.countRules(profile.id).toString() + ' 条规则';
   }
 
   private profileDateText(profile: Profile): string {
@@ -593,6 +597,288 @@ struct Index {
       return 'Unknown';
     }
     return state.substring(0, 1).toUpperCase() + state.substring(1);
+  }
+
+  private runtimeStateLabel(state: string): string {
+    if (state === 'Connected') {
+      return '已连接';
+    }
+    if (state === 'Starting') {
+      return '启动中';
+    }
+    if (state === 'Stopping') {
+      return '停止中';
+    }
+    if (state === 'Error') {
+      return '异常';
+    }
+    if (state === 'Unknown') {
+      return '待确认';
+    }
+    return '已停止';
+  }
+
+  private coreStateLabel(state: string): string {
+    if (state === 'Running') {
+      return '运行中';
+    }
+    if (state === 'Loading') {
+      return '加载中';
+    }
+    if (state === 'Stopping') {
+      return '停止中';
+    }
+    if (state === 'Error') {
+      return '异常';
+    }
+    if (state === 'Unknown') {
+      return '待确认';
+    }
+    return '已停止';
+  }
+
+  private eventLevelLabel(level: string): string {
+    if (level === 'debug') {
+      return '调试';
+    }
+    if (level === 'warn' || level === 'warning') {
+      return '警告';
+    }
+    if (level === 'error') {
+      return '错误';
+    }
+    return '信息';
+  }
+
+  private eventSourceLabel(source: string): string {
+    if (source === 'ui') {
+      return '界面';
+    }
+    if (source === 'vpn') {
+      return 'VPN';
+    }
+    if (source === 'core') {
+      return '核心';
+    }
+    if (source === 'subscription') {
+      return '订阅';
+    }
+    if (source === 'config') {
+      return '配置';
+    }
+    if (source === 'diagnostic') {
+      return '诊断';
+    }
+    return source;
+  }
+
+  private localizedMessage(message: string): string {
+    if (message.startsWith('Error: ')) {
+      return '错误：' + this.localizedMessage(message.substring('Error: '.length));
+    }
+    if (message.startsWith('BusinessError: ')) {
+      return '系统错误：' + message.substring('BusinessError: '.length);
+    }
+    const nestedErrorIndex = message.indexOf('Error: ');
+    if (nestedErrorIndex > 0) {
+      return message.substring(0, nestedErrorIndex) + this.localizedMessage(message.substring(nestedErrorIndex));
+    }
+    if (message.startsWith('CONFIG_INVALID: ')) {
+      return '配置无效：' + message.substring('CONFIG_INVALID: '.length);
+    }
+    if (message === 'profiles.json has no profiles') {
+      return '配置列表为空';
+    }
+    if (message === 'Ready') {
+      return '准备就绪';
+    }
+    if (message === 'Connected') {
+      return '已连接';
+    }
+    if (message === 'Disconnected' || message === 'Disconnect finalized idle') {
+      return '已断开连接';
+    }
+    if (message === 'Core loaded') {
+      return '核心已加载';
+    }
+    if (message === 'Starting VPN') {
+      return '正在启动 VPN';
+    }
+    if (message === 'Stopping VPN') {
+      return '正在停止 VPN';
+    }
+    if (message === 'Connect requested') {
+      return '已请求连接';
+    }
+    if (message === 'Disconnect requested') {
+      return '已请求断开连接';
+    }
+    if (message === 'Config saved') {
+      return '配置已保存';
+    }
+    if (message === 'Config validation ok') {
+      return '配置校验通过';
+    }
+    if (message === 'Config validation failed') {
+      return '配置校验失败';
+    }
+    if (message === 'Background running started') {
+      return '后台运行已启动';
+    }
+    if (message === 'Background running stopped') {
+      return '后台运行已停止';
+    }
+    if (message === 'Traffic stats writer starting') {
+      return '流量统计正在启动';
+    }
+    if (message === 'Protect callback registered') {
+      return '网络保护回调已注册';
+    }
+    if (message === 'Protect hook auto-enabled by Go bridge') {
+      return '网络保护钩子已由 Go 桥接自动启用';
+    }
+    if (message === 'TUN poll probe disabled') {
+      return 'TUN 轮询探测已关闭';
+    }
+    if (message === 'Mihomo graceful stop: ok') {
+      return 'Mihomo 核心已平滑停止';
+    }
+    if (message === 'Diagnostics copied to clipboard') {
+      return '诊断信息已复制到剪贴板';
+    }
+    if (message === 'UI restored; runtime state needs verification') {
+      return '界面已恢复，正在确认运行状态';
+    }
+    if (message === 'All configuration reset') {
+      return '已重置全部配置';
+    }
+    if (message === 'BUSY' || message === 'Connect rejected: busy') {
+      return '当前正在处理其他操作，请稍后重试';
+    }
+    if (message === 'latency test timeout') {
+      return '节点测速超时';
+    }
+    if (message.startsWith('Connected profile=')) {
+      return '已连接，配置=' + message.substring('Connected profile='.length);
+    }
+    if (message.startsWith('Connect requested profile=')) {
+      return '已请求连接，配置=' + message.substring('Connect requested profile='.length);
+    }
+    if (message.startsWith('Starting VPN profile=')) {
+      return '正在启动 VPN，配置=' + message.substring('Starting VPN profile='.length);
+    }
+    if (message.startsWith('Connect failed: ')) {
+      return '连接失败：' + message.substring('Connect failed: '.length);
+    }
+    if (message.startsWith('Disconnect failed: ')) {
+      return '断开失败：' + message.substring('Disconnect failed: '.length);
+    }
+    if (message.startsWith('Active profile changed to ')) {
+      return '当前配置已切换为 ' + message.substring('Active profile changed to '.length);
+    }
+    if (message.startsWith('Config rejected: ')) {
+      return '配置未通过校验：' + message.substring('Config rejected: '.length);
+    }
+    if (message.startsWith('Auto refresh subscription before connect profile=')) {
+      return '连接前正在自动更新订阅，配置=' +
+        message.substring('Auto refresh subscription before connect profile='.length);
+    }
+    if (message.startsWith('Auto refresh subscription ok bytes=')) {
+      return '订阅自动更新成功，字节数=' + message.substring('Auto refresh subscription ok bytes='.length);
+    }
+    if (message.startsWith('Auto refresh subscription failed, using cached runtime: ')) {
+      return '订阅自动更新失败，已使用缓存配置：' +
+        message.substring('Auto refresh subscription failed, using cached runtime: '.length);
+    }
+    if (message.startsWith('Diagnostics export failed: ')) {
+      return '诊断导出失败：' + message.substring('Diagnostics export failed: '.length);
+    }
+    if (message.startsWith('Diagnostics copy failed: ')) {
+      return '诊断信息复制失败：' + message.substring('Diagnostics copy failed: '.length);
+    }
+    if (message.startsWith('Latency test error: ')) {
+      return '节点测速失败：' + message.substring('Latency test error: '.length);
+    }
+    if (message.startsWith('Latency test requested groups=')) {
+      return '已请求节点测速，组数=' + message.substring('Latency test requested groups='.length);
+    }
+    if (message.startsWith('Latency test skipped: ')) {
+      return '已跳过节点测速：' + message.substring('Latency test skipped: '.length);
+    }
+    if (message.startsWith('Proxy selected group=')) {
+      return '节点已切换，组=' + message.substring('Proxy selected group='.length);
+    }
+    if (message.startsWith('Proxy selection failed group=')) {
+      return '节点切换失败，组=' + message.substring('Proxy selection failed group='.length);
+    }
+    if (message.startsWith('Proxy selection requested group=')) {
+      return '已请求切换节点，组=' + message.substring('Proxy selection requested group='.length);
+    }
+    if (message.startsWith('Proxy selected for next connection group=')) {
+      return '节点选择已保存供下次连接使用，组=' +
+        message.substring('Proxy selected for next connection group='.length);
+    }
+    if (message.startsWith('Proxy select failed group=')) {
+      return '节点选择失败，组=' + message.substring('Proxy select failed group='.length);
+    }
+    if (message.startsWith('Core start status: ')) {
+      return '核心启动状态：' + message.substring('Core start status: '.length);
+    }
+    if (message.startsWith('Mihomo version unavailable: ')) {
+      return '无法读取 Mihomo 版本：' + message.substring('Mihomo version unavailable: '.length);
+    }
+    if (message.startsWith('VPN created fd=')) {
+      return 'VPN 已创建，文件描述符=' + message.substring('VPN created fd='.length);
+    }
+    if (message.startsWith('Traffic stats source=')) {
+      return '流量统计来源=' + message.substring('Traffic stats source='.length);
+    }
+    if (message.startsWith('Traffic stats writer failed: ')) {
+      return '流量统计启动失败：' + message.substring('Traffic stats writer failed: '.length);
+    }
+    if (message.startsWith('Traffic stats unavailable: ')) {
+      return '流量统计不可用：' + message.substring('Traffic stats unavailable: '.length);
+    }
+    if (message.startsWith('Background running failed: ')) {
+      return '后台运行启动失败：' + message.substring('Background running failed: '.length);
+    }
+    if (message.startsWith('Background running stop failed: ')) {
+      return '后台运行停止失败：' + message.substring('Background running stop failed: '.length);
+    }
+    if (message.startsWith('Settings updated: ')) {
+      return this.localizedSettingsEvent(message.substring('Settings updated: '.length));
+    }
+    if (message.startsWith('Mihomo graceful stop: failed code=')) {
+      return 'Mihomo 核心平滑停止失败，错误码=' +
+        message.substring('Mihomo graceful stop: failed code='.length);
+    }
+    if (message.startsWith('Mihomo graceful stop threw: ')) {
+      return 'Mihomo 核心平滑停止异常：' + message.substring('Mihomo graceful stop threw: '.length);
+    }
+    if (message.startsWith('CONFIG_TOO_LARGE')) {
+      return '配置文件过大：' + message.substring('CONFIG_TOO_LARGE'.length);
+    }
+    return message;
+  }
+
+  private localizedSettingsEvent(detail: string): string {
+    const modeMark = ' mode=';
+    const dnsMark = ' dns=';
+    const modeIndex = detail.indexOf(modeMark);
+    const dnsIndex = detail.indexOf(dnsMark);
+    if (!detail.startsWith('route=') || modeIndex < 0 || dnsIndex < 0 || dnsIndex <= modeIndex) {
+      return '设置已更新：' + detail;
+    }
+    const routeMode = detail.substring('route='.length, modeIndex);
+    const proxyMode = detail.substring(modeIndex + modeMark.length, dnsIndex);
+    const dnsMode = detail.substring(dnsIndex + dnsMark.length);
+    return '设置已更新：路由=' + this.routeModeLabel(routeMode) + '，模式=' +
+      this.proxyModeLabel(proxyMode) + '，DNS=' + this.dnsModeLabel(dnsMode);
+  }
+
+  private eventLineText(event: RuntimeEvent): string {
+    return this.eventTimeText(event) + ' · ' + this.eventLevelLabel(event.level) + ' · ' +
+      this.localizedMessage(event.message);
   }
 
   private toErrorText(err: Object): string {
@@ -916,7 +1202,7 @@ struct Index {
     if (this.createMode === 2) {
       return '扫描包含 http/https 订阅地址的二维码';
     }
-    return '从 URL 导入订阅配置';
+    return '从订阅链接导入配置';
   }
 
   private validationSummary(result: ConfigValidationResult): string {
@@ -1243,10 +1529,16 @@ struct Index {
     const keyword = this.logSearchText.trim().toLowerCase();
     return this.runtimeEvents.filter((event: RuntimeEvent) => {
       const levelOk = this.logLevelFilter === 'all' || event.level === this.logLevelFilter;
+      const localizedMessage = this.localizedMessage(event.message).toLowerCase();
+      const localizedSource = this.eventSourceLabel(event.source).toLowerCase();
+      const localizedLevel = this.eventLevelLabel(event.level).toLowerCase();
       const keywordOk = keyword.length === 0 ||
         event.message.toLowerCase().indexOf(keyword) >= 0 ||
         event.source.toLowerCase().indexOf(keyword) >= 0 ||
-        event.level.toLowerCase().indexOf(keyword) >= 0;
+        event.level.toLowerCase().indexOf(keyword) >= 0 ||
+        localizedMessage.indexOf(keyword) >= 0 ||
+        localizedSource.indexOf(keyword) >= 0 ||
+        localizedLevel.indexOf(keyword) >= 0;
       return levelOk && keywordOk;
     });
   }
@@ -1314,7 +1606,8 @@ struct Index {
   }
 
   private eventTimeText(event: RuntimeEvent): string {
-    return new Date(event.timestamp).toLocaleTimeString();
+    const date = new Date(event.timestamp);
+    return this.pad2(date.getHours()) + ':' + this.pad2(date.getMinutes()) + ':' + this.pad2(date.getSeconds());
   }
 
   private eventToneColor(level: RuntimeEventLevel): string {
@@ -1367,10 +1660,10 @@ struct Index {
       const lower = event.message.toLowerCase();
       if (lower.indexOf('protect failed') >= 0 || lower.indexOf('protect hook') >= 0 &&
         lower.indexOf('failed') >= 0) {
-        return '异常: ' + event.message;
+        return '异常：' + this.localizedMessage(event.message);
       }
       if (lower.indexOf('protect hook auto-enabled') >= 0 || lower.indexOf('protect callback registered') >= 0) {
-        return 'active';
+        return '已启用';
       }
     }
     return this.statusText === 'Connected' ? '待确认' : '未运行';
@@ -1384,10 +1677,10 @@ struct Index {
       }
       if (lower.indexOf('mihomo graceful stop') >= 0 &&
         (lower.indexOf('failed') >= 0 || lower.indexOf('threw') >= 0)) {
-        return '异常: ' + event.message;
+        return '异常：' + this.localizedMessage(event.message);
       }
       if (lower.indexOf('skipping graceful stop') >= 0) {
-        return '跳过: 无 active TUN fd';
+        return '已跳过：无活动的 TUN 文件描述符';
       }
     }
     return this.tunFdText() !== '-1' ? '可用，待断开验证' : '未运行';
@@ -1474,29 +1767,32 @@ struct Index {
     this.updateSettings({ logLevel: levels[(index + 1) % levels.length] });
   }
 
-  private routeModeLabel(mode: VpnRouteMode): string {
+  private routeModeLabel(mode: string): string {
     if (mode === 'blocking-default') {
-      return 'Blocking Default';
+      return '全量接管';
     }
     if (mode === 'split-default') {
-      return 'Split Default';
+      return '分段默认路由';
     }
     if (mode === 'default') {
-      return 'Default Route';
+      return '系统默认路由';
     }
     if (mode === 'no-routes') {
-      return 'No Routes';
+      return '不下发路由';
     }
     if (mode === 'exclude-local') {
-      return 'Exclude Local';
+      return '排除局域网';
     }
     if (mode === 'blocking-split') {
-      return 'Blocking Split';
+      return '阻塞分段路由';
     }
-    return 'Blocking Empty';
+    if (mode === 'blocking-empty') {
+      return '阻塞空路由';
+    }
+    return mode;
   }
 
-  private proxyModeLabel(mode: ProxyMode): string {
+  private proxyModeLabel(mode: string): string {
     if (mode === 'global') {
       return '全局';
     }
@@ -1506,7 +1802,7 @@ struct Index {
     return '规则';
   }
 
-  private dnsModeLabel(mode: DnsMode): string {
+  private dnsModeLabel(mode: string): string {
     if (mode === 'redir-host') {
       return 'redir-host';
     }
@@ -1571,7 +1867,7 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryText())
           .maxLines(1)
-        Text('v0.1 · MVP-01 · ' + this.activeProfileName)
+        Text('v0.1 · MVP-01 · ' + this.activeProfileLabel())
           .fontSize(11)
           .fontColor(this.mutedText())
           .maxLines(1)
@@ -1580,7 +1876,7 @@ struct Index {
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
 
-      Button('Diag')
+      Button('诊断')
         .height(36)
         .fontSize(12)
         .fontColor(this.accentColor())
@@ -1681,7 +1977,7 @@ struct Index {
         .maxLines(2)
         .textAlign(TextAlign.Center)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text(this.activeProfileName + ' · blocking-default')
+      Text(this.activeProfileLabel() + ' · ' + this.routeModeLabel(this.appSettings.routeMode))
         .fontSize(11)
         .fontColor(this.mutedText())
         .maxLines(1)
@@ -1698,7 +1994,7 @@ struct Index {
         Text('●')
           .fontSize(8)
           .fontColor(this.stateAccentColor())
-        Text('VPN: ' + this.statusText)
+        Text('VPN：' + this.runtimeStateLabel(this.statusText))
           .fontSize(11)
           .fontColor(this.secondaryText())
           .maxLines(1)
@@ -1712,7 +2008,7 @@ struct Index {
         Text('●')
           .fontSize(8)
           .fontColor(this.coreText === 'Running' ? this.accentColor() : this.secondaryText())
-        Text('Core: ' + this.coreText)
+        Text('核心：' + this.coreStateLabel(this.coreText))
           .fontSize(11)
           .fontColor(this.secondaryText())
           .maxLines(1)
@@ -1758,12 +2054,12 @@ struct Index {
 
   @Builder ErrorBanner() {
     Column({ space: 4 }) {
-      Text('启动失败')
+      Text('运行异常')
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.dangerColor())
         .width('100%')
-      Text(this.lastError)
+      Text(this.localizedMessage(this.lastError))
         .fontSize(12)
         .fontColor(this.secondaryText())
         .width('100%')
@@ -1885,19 +2181,19 @@ struct Index {
 
   @Builder ProfileChipsSection() {
     Column({ space: 8 }) {
-      this.SectionTitle('配置 Profile', '')
+      this.SectionTitle('配置', '')
       Scroll() {
         Row({ space: 8 }) {
           ForEach(this.profiles, (p: Profile) => {
             Column({ space: 3 }) {
-              Text(p.name)
+              Text(this.profileNameLabel(p))
                 .fontSize(13)
                 .fontWeight(FontWeight.Medium)
                 .fontColor(p.active ? this.accentColor() : this.secondaryText())
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
-              Text((p.type === 'subscription' ? 'sub' : 'local') + ' · ' + this.profileRuleText(p) +
-                ' · ' + (p.active ? 'active' : this.profileRelativeText(p)))
+              Text((p.type === 'subscription' ? '订阅' : '本地') + ' · ' + this.profileRuleText(p) +
+                ' · ' + (p.active ? '当前' : this.profileRelativeText(p)))
                 .fontSize(10)
                 .fontColor(p.active ? '#78E2D5' : this.mutedText())
                 .maxLines(1)
@@ -1927,10 +2223,6 @@ struct Index {
           .fontSize(13)
           .fontColor(this.primaryText())
           .layoutWeight(1)
-        Text(this.appSettings.routeMode)
-          .fontSize(11)
-          .fontColor(this.mutedText())
-          .margin({ right: 10 })
         Text('>')
           .fontSize(14)
           .fontColor(this.mutedText())
@@ -1950,15 +2242,15 @@ struct Index {
     Column({ space: 8 }) {
       this.SectionTitle('运行事件', '查看全部')
       Column() {
-        ForEach(this.events.slice(0, 4), (line: string) => {
-          Text(line)
+        ForEach(this.runtimeEvents.slice(0, 4), (event: RuntimeEvent) => {
+          Text(this.eventLineText(event))
             .fontSize(12)
             .fontColor(this.secondaryText())
             .width('100%')
             .padding({ left: 12, right: 12, top: 8, bottom: 8 })
             .maxLines(2)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }, (line: string) => line)
+        }, (event: RuntimeEvent) => event.timestamp.toString() + event.message)
       }
       .width('100%')
       .backgroundColor(this.surfaceBg())
@@ -2247,7 +2539,7 @@ struct Index {
   @Builder ProfileListPanel() {
     Column({ space: 10 }) {
       Row() {
-        Text('Profile 列表')
+        Text('配置列表')
           .fontSize(12)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.mutedText())
@@ -2272,7 +2564,7 @@ struct Index {
       }, (p: Profile) => p.id)
 
       if (this.subStatus.length > 0) {
-        Text(this.subStatus)
+        Text(this.localizedMessage(this.subStatus))
           .fontSize(12)
           .fontColor(this.secondaryText())
           .width('100%')
@@ -2296,7 +2588,7 @@ struct Index {
         })
 
       Column({ space: 5 }) {
-        Text(p.name)
+        Text(this.profileNameLabel(p))
           .fontSize(15)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryText())
@@ -2436,7 +2728,7 @@ struct Index {
       }
       .width('100%')
 
-      Text(this.validationText)
+      Text(this.localizedMessage(this.validationText))
         .fontSize(12)
         .fontColor(this.secondaryText())
         .width('100%')
@@ -2452,9 +2744,9 @@ struct Index {
   @Builder CreateConfigPage() {
     Scroll() {
       Column({ space: 14 }) {
-        this.CreateOptionRow('FILE', '文件', '从文件导入', 0)
-        this.CreateOptionRow('URL', 'URL', '从 URL 导入', 1)
-        this.CreateOptionRow('QR', 'QR Code', '从二维码导入', 2)
+        this.CreateOptionRow('文件', '本地文件', '从文件导入', 0)
+        this.CreateOptionRow('链接', '订阅链接', '从 URL 导入', 1)
+        this.CreateOptionRow('扫码', '二维码', '扫描二维码导入', 2)
 
         Column({ space: 10 }) {
           Text(this.createModeSubtitle())
@@ -2549,7 +2841,7 @@ struct Index {
           }
 
           if (this.subStatus.length > 0) {
-            Text(this.subStatus)
+            Text(this.localizedMessage(this.subStatus))
               .fontSize(12)
               .fontColor(this.secondaryText())
               .width('100%')
@@ -2622,9 +2914,9 @@ struct Index {
       Column({ space: 10 }) {
         Row({ space: 8 }) {
           this.LogFilterChip('全部', 'all')
-          this.LogFilterChip('Info', 'info')
-          this.LogFilterChip('Warn', 'warn')
-          this.LogFilterChip('Error', 'error')
+          this.LogFilterChip('信息', 'info')
+          this.LogFilterChip('警告', 'warn')
+          this.LogFilterChip('错误', 'error')
         }
         .width('100%')
 
@@ -2710,11 +3002,11 @@ struct Index {
   @Builder LogEventRow(event: RuntimeEvent) {
     Column({ space: 6 }) {
       Row({ space: 8 }) {
-        Text(event.level.toUpperCase())
+        Text(this.eventLevelLabel(event.level))
           .fontSize(10)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.eventToneColor(event.level))
-        Text(event.source)
+        Text(this.eventSourceLabel(event.source))
           .fontSize(10)
           .fontColor(this.mutedText())
         Text(this.eventTimeText(event))
@@ -2724,7 +3016,7 @@ struct Index {
           .textAlign(TextAlign.End)
       }
       .width('100%')
-      Text(event.message)
+      Text(this.localizedMessage(event.message))
         .fontSize(12)
         .fontColor(this.secondaryText())
         .width('100%')
@@ -2746,14 +3038,15 @@ struct Index {
         this.DnsModeSettingRow()
         this.LogLevelSettingRow()
         this.SettingsGroup('网络')
-        this.ToggleSettingRow('IPv6', '写入 runtime YAML，并传入 VPN 配置', 'ipv6')
-        this.ToggleSettingRow('UDP 转发', '保存到连接设置，用于后续 native UDP 策略', 'udp')
-        this.ToggleSettingRow('连接前自动更新订阅', '失败时沿用上一次可用 runtime', 'autoRefresh')
+        this.ToggleSettingRow('IPv6', '写入运行时 YAML，并传入 VPN 配置', 'ipv6')
+        this.ToggleSettingRow('UDP 转发', '保存到连接设置，用于后续原生 UDP 策略', 'udp')
+        this.ToggleSettingRow('连接前自动更新订阅', '失败时沿用上一次可用的运行时配置', 'autoRefresh')
         this.SettingsGroup('诊断')
-        this.SettingsActionRow('Runtime', this.statusText + ' / Core: ' + this.coreText, '查看', () => {
+        this.SettingsActionRow('运行状态', 'VPN：' + this.runtimeStateLabel(this.statusText) + ' / 核心：' +
+          this.coreStateLabel(this.coreText), '查看', () => {
           this.selectSection(9);
         })
-        this.SettingsRow('VPN DNS', '传给 VPN Extension 的 DNS 地址', this.appSettings.vpnDnsAddress)
+        this.SettingsRow('VPN DNS', '传给 VPN 扩展的 DNS 地址', this.appSettings.vpnDnsAddress)
         this.SettingsActionRow('帮助', '配置、连接与诊断说明', '查看', () => {
           this.selectSection(6);
         })
@@ -2789,7 +3082,7 @@ struct Index {
 
   @Builder ProxyModeSettingRow() {
     Row({ space: 12 }) {
-      this.SettingsRowText('启动模式', '规则 / 全局 / 直连会写入 runtime YAML')
+      this.SettingsRowText('启动模式', '规则 / 全局 / 直连会写入运行时 YAML')
       Text(this.proxyModeLabel(this.appSettings.proxyMode))
         .fontSize(12)
         .fontColor(this.accentColor())
@@ -2807,15 +3100,11 @@ struct Index {
 
   @Builder RouteModeSettingRow() {
     Row({ space: 12 }) {
-      this.SettingsRowText('VPN 路由', '决定 VPN Extension 下发 default/split/blocking 路由')
+      this.SettingsRowText('VPN 路由', '决定 VPN 扩展下发的路由策略')
       Column({ space: 2 }) {
         Text(this.routeModeLabel(this.appSettings.routeMode))
           .fontSize(12)
           .fontColor(this.accentColor())
-          .maxLines(1)
-        Text(this.appSettings.routeMode)
-          .fontSize(10)
-          .fontColor(this.mutedText())
           .maxLines(1)
       }
       .alignItems(HorizontalAlign.End)
@@ -2832,7 +3121,7 @@ struct Index {
 
   @Builder DnsModeSettingRow() {
     Row({ space: 12 }) {
-      this.SettingsRowText('DNS 模式', 'default/fake-ip/redir-host 会写入 runtime YAML')
+      this.SettingsRowText('DNS 模式', 'default/fake-ip/redir-host 会写入运行时 YAML')
       Text(this.dnsModeLabel(this.appSettings.dnsMode))
         .fontSize(12)
         .fontColor(this.accentColor())
@@ -2850,8 +3139,8 @@ struct Index {
 
   @Builder LogLevelSettingRow() {
     Row({ space: 12 }) {
-      this.SettingsRowText('日志级别', '写入 runtime YAML log-level')
-      Text(this.appSettings.logLevel)
+      this.SettingsRowText('日志级别', '写入运行时 YAML 的 log-level')
+      Text(this.eventLevelLabel(this.appSettings.logLevel))
         .fontSize(12)
         .fontColor(this.accentColor())
         .maxLines(1)
@@ -2956,23 +3245,25 @@ struct Index {
         }
         .width('100%')
 
-        this.DiagCard('Runtime 快照', 'VPN: ' + this.statusText + ' · Core: ' + this.coreText,
-          'updatedAt: ' + this.snapshotUpdatedText() + ' · startedAt: ' + this.startedAtText())
-        this.DiagCard('Mihomo Core', 'version: ' + this.mihomoVersionText(),
-          'graceful stop: ' + this.gracefulStopText())
-        this.DiagCard('Active Profile', this.activeProfileName, this.activeProfileId)
+        this.DiagCard('运行快照', 'VPN：' + this.runtimeStateLabel(this.statusText) + ' · 核心：' +
+          this.coreStateLabel(this.coreText), '更新时间：' + this.snapshotUpdatedText() + ' · 启动时间：' +
+          this.startedAtText())
+        this.DiagCard('Mihomo 核心', '版本：' + this.mihomoVersionText(),
+          '平滑停止：' + this.gracefulStopText())
+        this.DiagCard('当前配置', this.activeProfileLabel(), this.activeProfileId)
         this.DiagCard('当前节点', this.selectedProxyGroupLabel() + ' / ' + this.selectedNodeName(), this.selectedNodeMeta())
-        this.DiagCard('Bridge', 'tunFd: ' + this.tunFdText(), 'protect hook: ' + this.protectHookText())
-        this.DiagCard('流量统计', 'source=' + this.trafficSourceLabel() + ' · down=' +
-          this.formatBytes(this.downloadSpeed) + '/s · up=' + this.formatBytes(this.uploadSpeed) + '/s',
-          'today=' + this.formatBytes(this.todayDownloadBytes + this.todayUploadBytes))
-        this.DiagCard('设置', 'route=' + this.appSettings.routeMode + ' · mode=' + this.appSettings.proxyMode,
-          'dns=' + this.appSettings.dnsMode + ' · log=' + this.appSettings.logLevel)
-        this.DiagCard('最近错误', this.lastError.length > 0 ? this.lastError : '无',
-          this.runtimeEvents.length > 0 ? this.runtimeEvents[0].message : '暂无事件')
-        this.DiagCard('POC / Smoke', this.pocSmokeSummary(), '脚本摘要未接入时显示未运行')
+        this.DiagCard('通信桥接', 'TUN 文件描述符：' + this.tunFdText(), '保护钩子：' + this.protectHookText())
+        this.DiagCard('流量统计', '来源=' + this.trafficSourceLabel() + ' · 下载=' +
+          this.formatRate(this.downloadSpeed) + ' · 上传=' + this.formatRate(this.uploadSpeed),
+          '今日=' + this.formatBytes(this.todayDownloadBytes + this.todayUploadBytes))
+        this.DiagCard('设置', '路由=' + this.routeModeLabel(this.appSettings.routeMode) + ' · 模式=' +
+          this.proxyModeLabel(this.appSettings.proxyMode), 'DNS=' + this.appSettings.dnsMode + ' · 日志=' +
+          this.eventLevelLabel(this.appSettings.logLevel))
+        this.DiagCard('最近错误', this.lastError.length > 0 ? this.localizedMessage(this.lastError) : '无',
+          this.runtimeEvents.length > 0 ? this.localizedMessage(this.runtimeEvents[0].message) : '暂无事件')
+        this.DiagCard('功能自检', this.pocSmokeSummary(), '脚本摘要未接入时显示未运行')
         if (this.lastDiagnosticPath.length > 0) {
-          this.DiagCard('导出文件', this.lastDiagnosticPath, '包含 snapshot、settings、active profile、最近 60 条事件')
+          this.DiagCard('导出文件', this.lastDiagnosticPath, '包含运行快照、设置、当前配置和最近 60 条事件')
         }
         if (this.diagnosticText.length > 0) {
           this.DiagCard('诊断摘要', this.diagnosticText.substring(0, Math.min(80, this.diagnosticText.length)),
@@ -3026,7 +3317,8 @@ struct Index {
 
   @Builder AboutPage() {
     Column({ space: 12 }) {
-      this.DiagCard('FlowGuard', 'HarmonyOS mihomo client prototype', 'Runtime: ' + this.statusText + ' · Core: ' + this.coreText)
+      this.DiagCard('FlowGuard', 'HarmonyOS mihomo 客户端原型', '运行状态：' +
+        this.runtimeStateLabel(this.statusText) + ' · 核心：' + this.coreStateLabel(this.coreText))
     }
     .width('100%')
     .padding(20)
