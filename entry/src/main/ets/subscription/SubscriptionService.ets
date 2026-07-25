@@ -56,6 +56,9 @@ export class SubscriptionService {
         result
       };
     }
+    if (!this.configService.getActiveProfile()) {
+      this.configService.setActiveProfile(profile.id);
+    }
     return {
       profile: this.configService.getProfile(profile.id) ?? profile,
       result

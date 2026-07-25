@@ -142,24 +142,21 @@ export class ConfigService {
     return profile;
   }
 
-  getActiveProfile(): Profile {
+  getActiveProfile(): Profile | null {
     const state = this.loadProfilesState();
-    const active = this.findProfile(state, state.activeProfileId);
-    if (active) {
-      return active;
-    }
-    return this.ensureDefaultProfile();
+    return this.findProfile(state, state.activeProfileId);
   }
 
-  loadRawYaml(profileId: string = DEFAULT_PROFILE_ID): string {
+  loadRawYaml(profileId: string = ''): string {
     const profile = this.getProfile(profileId);
     if (!profile || !this.pathExists(profile.rawPath)) {
-      return DEFAULT_RAW_CONFIG;
+      return '';
     }
     return fs.readTextSync(profile.rawPath);
   }
 
   saveDefaultRawYaml(content: string): ConfigValidationResult {
+    this.ensureDefaultProfile();
     return this.saveRawYaml(DEFAULT_PROFILE_ID, content);
   }
 
@@ -176,7 +173,15 @@ export class ConfigService {
   }
 
   saveRawYaml(profileId: string, content: string): ConfigValidationResult {
-    const profile = this.getProfile(profileId) ?? this.ensureDefaultProfile();
+    const profile = this.getProfile(profileId);
+    if (!profile) {
+      return {
+        ok: false,
+        unsupportedKeys: [],
+        errors: ['配置不存在，请先创建配置'],
+        warnings: []
+      };
+    }
     const validation = this.validateRawYaml(content);
     const now = Date.now();
     profile.updatedAt = now;
@@ -264,10 +269,9 @@ export class ConfigService {
   loadProfilesState(): ProfilesState {
     const layout = this.ensureLayout();
     if (!this.pathExists(layout.profilesPath)) {
-      const profile = this.createDefaultProfileObject(layout);
       const initial: ProfilesState = {
-        activeProfileId: DEFAULT_PROFILE_ID,
-        profiles: [profile]
+        activeProfileId: '',
+        profiles: []
       };
       this.saveProfilesState(initial);
       return initial;
@@ -276,15 +280,14 @@ export class ConfigService {
     try {
       const text = fs.readTextSync(layout.profilesPath);
       const parsed = JSON.parse(text) as ProfilesState;
-      if (!parsed.profiles || parsed.profiles.length === 0) {
-        throw new Error('profiles.json has no profiles');
+      if (!parsed.profiles) {
+        throw new Error('profiles.json has invalid profiles');
       }
       return parsed;
     } catch (_) {
-      const profile = this.createDefaultProfileObject(layout);
       const fallback: ProfilesState = {
-        activeProfileId: DEFAULT_PROFILE_ID,
-        profiles: [profile]
+        activeProfileId: '',
+        profiles: []
       };
       this.saveProfilesState(fallback);
       return fallback;
@@ -338,6 +341,9 @@ export class ConfigService {
     this.writeTextFileAtomic(profile.rawPath, content);
     this.writeTextFileAtomic(profile.runtimePath, this.generateRuntimeYaml(content));
     this.updateProfile(profile);
+    if (!this.getActiveProfile()) {
+      this.setActiveProfile(profile.id);
+    }
     return profile;
   }
 
@@ -346,11 +352,12 @@ export class ConfigService {
     const state = this.loadProfilesState();
     const id = 'local-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 10000).toString(36);
     const now = Date.now();
+    const firstProfile = state.profiles.length === 0;
     const profile: Profile = {
       id: id,
       name: name.length > 0 ? name : '新配置',
       type: 'local',
-      active: false,
+      active: firstProfile,
       sourceUrl: '',
       rawPath: layout.profileDir + '/' + id + '.raw.yaml',
       runtimePath: layout.runDir + '/' + id + '.runtime.yaml',
@@ -368,6 +375,9 @@ export class ConfigService {
     this.writeTextFileAtomic(profile.rawPath, content);
     this.writeTextFileAtomic(profile.runtimePath, this.generateRuntimeYaml(content));
     state.profiles.push(profile);
+    if (firstProfile) {
+      state.activeProfileId = profile.id;
+    }
     this.saveProfilesState(state);
     return profile;
   }
@@ -439,7 +449,7 @@ export class ConfigService {
 
   deleteProfile(profileId: string): boolean {
     const state = this.loadProfilesState();
-    if (profileId === DEFAULT_PROFILE_ID || state.profiles.length <= 1) {
+    if (profileId === DEFAULT_PROFILE_ID) {
       return false;
     }
     if (state.activeProfileId === profileId) {
@@ -452,10 +462,6 @@ export class ConfigService {
     }
 
     const remaining = state.profiles.filter((item: Profile) => item.id !== profileId);
-    if (remaining.length === 0) {
-      return false;
-    }
-
     for (const item of remaining) {
       if (item.id !== state.activeProfileId) {
         item.active = false;
@@ -538,7 +544,11 @@ export class ConfigService {
   }
 
   listProxySelections(profileId: string = ''): ProxySelection[] {
-    const targetId = profileId.length > 0 ? profileId : this.getActiveProfile().id;
+    const active = this.getActiveProfile();
+    const targetId = profileId.length > 0 ? profileId : (active ? active.id : '');
+    if (targetId.length === 0) {
+      return [];
+    }
     return this.loadProxySelectionState().selections.filter((item: ProxySelection) => {
       return item.profileId === targetId;
     });
@@ -592,7 +602,7 @@ export class ConfigService {
     return cleared;
   }
 
-  resetAllConfiguration(): Profile {
+  resetAllConfiguration(): void {
     const layout = this.ensureLayout();
     const state = this.loadProfilesState();
     for (const profile of state.profiles) {
@@ -613,7 +623,7 @@ export class ConfigService {
       this.deleteIfExists(path);
     }
     this.clearGeneratedCache();
-    return this.ensureDefaultProfile();
+    this.saveProfilesState({ activeProfileId: '', profiles: [] });
   }
 
   countRules(profileId: string = ''): number {

@@ -336,9 +336,21 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     const store = new RuntimeStore(this.context.filesDir);
     const configService = new ConfigService(this.context.filesDir);
     const params = want.parameters as Record<string, Object> | undefined;
-    const requestedProfileId = this.getStringParam(params, 'profileId', 'default');
+    const requestedProfileId = this.getStringParam(params, 'profileId', '');
     const vpnOptions = this.parseProductVpnOptions(params);
-    const profile = configService.getProfile(requestedProfileId) ?? configService.ensureDefaultProfile();
+    const profile = configService.getProfile(requestedProfileId);
+    if (!profile) {
+      store.update({
+        runtimeState: 'error',
+        coreState: 'error',
+        activeProfileId: '',
+        activeProfileName: '未配置',
+        lastError: 'NO_ACTIVE_PROFILE',
+        lastEvent: 'Connect rejected: no active profile'
+      });
+      store.appendEvent('Connect rejected: no active profile', 'error', 'vpn');
+      return;
+    }
 
     hilog.info(DOMAIN, TAG,
       'product %{public}s connect profile=%{public}s routeMode=%{public}s dns=%{public}s readProbeMs=%{public}d',

@@ -47,7 +47,6 @@ interface MvpCommandParams extends Record<string, Object> {
 
 export default class EntryAbility extends UIAbility {
   private windowStage?: window.WindowStage;
-  private lastContentReloadAt: number = 0;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -90,7 +89,6 @@ export default class EntryAbility extends UIAbility {
     // Ability has brought to foreground
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onForeground');
     this.notifyUiRuntimeRefresh('onForeground');
-    this.reloadMainContentSoon('onForeground');
   }
 
   onBackground(): void {
@@ -107,17 +105,6 @@ export default class EntryAbility extends UIAbility {
       hilog.warn(DOMAIN, TAG, 'notifyUiRuntimeRefresh failed source=%{public}s err=%{public}s',
         source, JSON.stringify(err));
     }
-  }
-
-  private reloadMainContentSoon(source: string): void {
-    const now = Date.now();
-    if (now - this.lastContentReloadAt < 1000) {
-      return;
-    }
-    this.lastContentReloadAt = now;
-    setTimeout(() => {
-      this.loadMainContent(source);
-    }, 150);
   }
 
   private loadMainContent(source: string): void {

@@ -216,13 +216,13 @@ export class RuntimeStore {
   }
 
   resetToIdle(message: string): void {
-    const profile = this.configService.ensureDefaultProfile();
+    const profile = this.configService.getActiveProfile();
     const now = Date.now();
     this.setSnapshot({
       runtimeState: 'idle',
       coreState: 'stopped',
-      activeProfileId: profile.id,
-      activeProfileName: profile.name,
+      activeProfileId: profile ? profile.id : '',
+      activeProfileName: profile ? profile.name : '未配置',
       tunFd: -1,
       startedAt: 0,
       updatedAt: now,
@@ -270,14 +270,14 @@ export class RuntimeStore {
   }
 
   private createInitialState(): RuntimeStateFile {
-    const profile = this.configService.ensureDefaultProfile();
+    const profile = this.configService.getActiveProfile();
     const now = Date.now();
     return {
       snapshot: {
         runtimeState: 'idle',
         coreState: 'stopped',
-        activeProfileId: profile.id,
-        activeProfileName: profile.name,
+        activeProfileId: profile ? profile.id : '',
+        activeProfileName: profile ? profile.name : '未配置',
         tunFd: -1,
         startedAt: 0,
         updatedAt: now,

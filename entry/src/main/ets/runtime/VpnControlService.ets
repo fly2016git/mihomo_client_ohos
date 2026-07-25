@@ -27,7 +27,10 @@ export class VpnControlService {
 
   async connect(profileId: string): Promise<void> {
     const settings = this.settingsService.load();
-    let profile = this.configService.getProfile(profileId) ?? this.configService.ensureDefaultProfile();
+    let profile = this.configService.getProfile(profileId);
+    if (!profile) {
+      throw new Error('NO_ACTIVE_PROFILE: 请先创建配置');
+    }
     if (settings.autoRefreshSubscriptionOnConnect && profile.type === 'subscription') {
       this.runtimeStore.appendEvent('Auto refresh subscription before connect profile=' + profile.name);
       const refreshResult = await this.subscriptionService.update(profile.id);

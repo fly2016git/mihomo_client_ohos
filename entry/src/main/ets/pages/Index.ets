@@ -40,7 +40,7 @@ const TAG = 'MihomoMvpPage';
 struct Index {
   @State statusText: string = 'Idle';
   @State coreText: string = 'Stopped';
-  @State activeProfileName: string = 'Default';
+  @State activeProfileName: string = '未配置';
   @State activeProfileId: string = '';
   @State lastError: string = '';
   @State rawYaml: string = '';
@@ -92,6 +92,7 @@ struct Index {
   private pollTimer: number = -1;
   private profileRefreshTick: number = 0;
   private loadedYamlProfileId: string = '';
+  private sectionHistory: number[] = [];
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
@@ -105,11 +106,13 @@ struct Index {
     this.settingsService = new SettingsService(filesDir);
     this.bindRuntimeRefreshEvent(context);
     this.bindRuntimeRefreshBus();
-    this.configService.ensureDefaultProfile();
     const profile = this.configService.getActiveProfile();
-    this.activeProfileId = profile.id;
-    this.rawYaml = this.configService.loadRawYaml(profile.id);
-    this.loadedYamlProfileId = profile.id;
+    if (profile) {
+      this.activeProfileId = profile.id;
+      this.activeProfileName = profile.name;
+      this.rawYaml = this.configService.loadRawYaml(profile.id);
+      this.loadedYamlProfileId = profile.id;
+    }
     this.loadSettings();
     this.reloadProfiles();
     this.markRestoredRuntimeUnknown();
@@ -135,6 +138,10 @@ struct Index {
     // real devices page-show callbacks are not always paired with every app
     // foreground transition, so stopping here can leave traffic tiles stale
     // after returning from another app.
+  }
+
+  onBackPress(): boolean {
+    return this.navigateBack();
   }
 
   onRuntimeRefreshSignalChanged(): void {
@@ -207,6 +214,17 @@ struct Index {
     }
     this.profiles = this.configService.listProfiles();
     const active = this.configService.getActiveProfile();
+    if (!active) {
+      this.activeProfileId = '';
+      this.activeProfileName = '未配置';
+      this.rawYaml = '';
+      this.loadedYamlProfileId = '';
+      this.proxyDelayRecords = this.configService.loadProxyLatencyState().records;
+      this.proxyGroups = [];
+      this.selectedProxyGroupName = '';
+      this.nodes = [];
+      return;
+    }
     this.activeProfileId = active.id;
     this.activeProfileName = active.name;
     this.proxyDelayRecords = this.configService.loadProxyLatencyState().records;
@@ -248,6 +266,9 @@ struct Index {
       return;
     }
     const profile = this.configService.getActiveProfile();
+    if (!profile) {
+      return;
+    }
     const rawYaml = this.configService.loadRawYaml(profile.id);
     const validation = this.configService.validateRawYaml(rawYaml);
     if (!validation.ok) {
@@ -364,7 +385,12 @@ struct Index {
     }
     this.busy = true;
     try {
-      const profile: Profile = this.configService.getActiveProfile();
+      const profile = this.configService.getActiveProfile();
+      if (!profile) {
+        this.validationText = '请先创建配置';
+        this.selectSection(3);
+        return;
+      }
       await this.vpnControlService.connect(profile.id);
       this.validationText = '正在启动连接';
     } catch (err) {
@@ -392,7 +418,8 @@ struct Index {
   }
 
   private canConnect(): boolean {
-    return !this.busy && (this.statusText === 'Idle' || this.statusText === 'Error' || this.statusText === 'Unknown');
+    return this.activeProfileId.length > 0 && !this.busy &&
+      (this.statusText === 'Idle' || this.statusText === 'Error' || this.statusText === 'Unknown');
   }
 
   private canDisconnect(): boolean {
@@ -432,17 +459,57 @@ struct Index {
   }
 
   private selectSection(index: number): void {
+    if (index === this.selectedSectionIndex) {
+      this.sheetVisible = false;
+      return;
+    }
+    if (this.isPrimarySection(index)) {
+      this.sectionHistory = [];
+    } else {
+      this.sectionHistory.push(this.selectedSectionIndex);
+    }
+    this.showSection(index);
+  }
+
+  private showSection(index: number): void {
     if (index === 2 && this.configService) {
       this.editProfileId = '';
       const active = this.configService.getActiveProfile();
-      this.rawYaml = this.configService.loadRawYaml(active.id);
-      this.loadedYamlProfileId = active.id;
+      if (active) {
+        this.rawYaml = this.configService.loadRawYaml(active.id);
+        this.loadedYamlProfileId = active.id;
+      } else {
+        this.rawYaml = '';
+        this.loadedYamlProfileId = '';
+      }
     }
     this.selectedSectionIndex = index;
     this.sheetVisible = false;
     if (index === 0 || index === 1 || index === 2) {
       this.reloadProfiles();
     }
+  }
+
+  private isPrimarySection(index: number): boolean {
+    return index === 0 || index === 1 || index === 2 || index === 4 || index === 5;
+  }
+
+  private navigateBack(): boolean {
+    if (this.sheetVisible) {
+      this.closeProfileActions();
+      return true;
+    }
+    if (this.selectedSectionIndex === 0) {
+      return false;
+    }
+    let target = 0;
+    if (!this.isPrimarySection(this.selectedSectionIndex) && this.sectionHistory.length > 0) {
+      target = this.sectionHistory.pop() ?? 0;
+    } else {
+      this.sectionHistory = [];
+    }
+    this.showSection(target);
+    return true;
   }
 
   private statusIconText(): string {
@@ -466,6 +533,9 @@ struct Index {
   }
 
   private statusSubtitleText(): string {
+    if (this.activeProfileId.length === 0) {
+      return '请先创建配置';
+    }
     if (this.statusText === 'Connected') {
       return this.formatBytes(this.uploadSpeed + this.downloadSpeed) + ' 已转发';
     }
@@ -535,6 +605,9 @@ struct Index {
   }
 
   private activeProfileLabel(): string {
+    if (this.activeProfileId.length === 0) {
+      return '未配置';
+    }
     if (this.activeProfileId === 'default' && this.activeProfileName === 'Default') {
       return '默认配置';
     }
@@ -987,7 +1060,8 @@ struct Index {
     }
     this.subBusy = true;
     try {
-      const profile = profileId.length > 0 ? this.configService.getProfile(profileId) : this.configService.getActiveProfile();
+      const profile = profileId.length > 0 ? this.configService.getProfile(profileId) :
+        this.configService.getActiveProfile();
       if (!profile || profile.type !== 'subscription') {
         this.subStatus = '当前配置不是 URL 订阅';
         return;
@@ -1015,6 +1089,10 @@ struct Index {
       return;
     }
     if (this.configService && this.configValidationService) {
+      if (this.activeProfileId.length === 0) {
+        this.subStatus = '请先创建配置';
+        return;
+      }
       const result = await this.configValidationService.validate(this.configService.loadRawYaml(this.activeProfileId));
       this.subStatus = this.validationSummary(result);
       this.reloadProfiles();
@@ -1173,12 +1251,12 @@ struct Index {
         if (!this.configService || !this.settingsService || !this.runtimeStore) {
           return;
         }
-        const profile = this.configService.resetAllConfiguration();
+        this.configService.resetAllConfiguration();
         this.appSettings = this.settingsService.load();
-        this.activeProfileId = profile.id;
-        this.activeProfileName = profile.name;
-        this.rawYaml = this.configService.loadRawYaml(profile.id);
-        this.loadedYamlProfileId = profile.id;
+        this.activeProfileId = '';
+        this.activeProfileName = '未配置';
+        this.rawYaml = '';
+        this.loadedYamlProfileId = '';
         this.editProfileId = '';
         this.runtimeStore.resetToIdle('All configuration reset');
         this.validationText = '全部配置已重置';
@@ -1561,6 +1639,10 @@ struct Index {
     }
     try {
       const profile = this.configService.getActiveProfile();
+      if (!profile) {
+        this.validationText = '请先创建配置后再导出诊断';
+        return;
+      }
       const path = this.runtimeStore.exportDiagnostics(this.appSettings, profile, this.selectedProxyGroupLabel(),
         this.selectedNodeName(), this.selectedNodeMeta());
       this.lastDiagnosticPath = path;
@@ -1581,6 +1663,10 @@ struct Index {
       return;
     }
     const profile = this.configService.getActiveProfile();
+    if (!profile) {
+      this.validationText = '请先创建配置后再复制诊断';
+      return;
+    }
     this.diagnosticText = this.runtimeStore.createDiagnosticsText(this.appSettings, profile,
       this.selectedProxyGroupLabel(), this.selectedNodeName(), this.selectedNodeMeta());
     try {
@@ -1600,6 +1686,11 @@ struct Index {
       return;
     }
     const profile = this.configService.getActiveProfile();
+    if (!profile) {
+      this.diagnosticText = '';
+      this.validationText = '请先创建配置';
+      return;
+    }
     this.diagnosticText = this.runtimeStore.createDiagnosticsText(this.appSettings, profile,
       this.selectedProxyGroupLabel(), this.selectedNodeName(), this.selectedNodeMeta());
     this.validationText = '诊断信息已刷新';
@@ -1905,8 +1996,10 @@ struct Index {
           .alignItems(HorizontalAlign.Center)
 
           Column({ space: 14 }) {
-            this.CurrentProxyCard()
-            this.TrafficRow()
+            if (this.activeProfileId.length > 0) {
+              this.CurrentProxyCard()
+              this.TrafficRow()
+            }
             this.ProfileChipsSection()
             this.RouteModeSection()
             this.EventSection()
@@ -1922,8 +2015,10 @@ struct Index {
           if (this.lastError.length > 0) {
             this.ErrorBanner()
           }
-          this.CurrentProxyCard()
-          this.TrafficRow()
+          if (this.activeProfileId.length > 0) {
+            this.CurrentProxyCard()
+            this.TrafficRow()
+          }
           this.MainActions()
           this.ProfileChipsSection()
           this.RouteModeSection()
@@ -2182,35 +2277,55 @@ struct Index {
   @Builder ProfileChipsSection() {
     Column({ space: 8 }) {
       this.SectionTitle('配置', '')
-      Scroll() {
-        Row({ space: 8 }) {
-          ForEach(this.profiles, (p: Profile) => {
-            Column({ space: 3 }) {
-              Text(this.profileNameLabel(p))
-                .fontSize(13)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(p.active ? this.accentColor() : this.secondaryText())
-                .maxLines(1)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-              Text((p.type === 'subscription' ? '订阅' : '本地') + ' · ' + this.profileRuleText(p) +
-                ' · ' + (p.active ? '当前' : this.profileRelativeText(p)))
-                .fontSize(10)
-                .fontColor(p.active ? '#78E2D5' : this.mutedText())
-                .maxLines(1)
-            }
-            .height(48)
-            .padding({ left: 12, right: 12, top: 7, bottom: 6 })
-            .backgroundColor(p.active ? '#17302F' : this.elevatedBg())
-            .borderRadius(10)
-            .onClick(() => {
-              this.switchProfile(p.id);
-            })
-          }, (p: Profile) => p.id)
+      if (this.profiles.length === 0) {
+        Row() {
+          Text('暂无配置，请先新建')
+            .fontSize(13)
+            .fontColor(this.secondaryText())
+            .layoutWeight(1)
+          Text('新建 >')
+            .fontSize(13)
+            .fontColor(this.accentColor())
         }
+        .height(48)
+        .width('100%')
+        .padding({ left: 12, right: 12 })
+        .backgroundColor(this.elevatedBg())
+        .borderRadius(10)
+        .onClick(() => {
+          this.selectSection(3);
+        })
+      } else {
+        Scroll() {
+          Row({ space: 8 }) {
+            ForEach(this.profiles, (p: Profile) => {
+              Column({ space: 3 }) {
+                Text(this.profileNameLabel(p))
+                  .fontSize(13)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(p.active ? this.accentColor() : this.secondaryText())
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text((p.type === 'subscription' ? '订阅' : '本地') + ' · ' + this.profileRuleText(p) +
+                  ' · ' + (p.active ? '当前' : this.profileRelativeText(p)))
+                  .fontSize(10)
+                  .fontColor(p.active ? '#78E2D5' : this.mutedText())
+                  .maxLines(1)
+              }
+              .height(48)
+              .padding({ left: 12, right: 12, top: 7, bottom: 6 })
+              .backgroundColor(p.active ? '#17302F' : this.elevatedBg())
+              .borderRadius(10)
+              .onClick(() => {
+                this.switchProfile(p.id);
+              })
+            }, (p: Profile) => p.id)
+          }
+        }
+        .scrollable(ScrollDirection.Horizontal)
+        .scrollBar(BarState.Off)
+        .width('100%')
       }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%')
     }
     .width('100%')
   }
@@ -2310,7 +2425,20 @@ struct Index {
   @Builder ProxyPage() {
     Scroll() {
       Column({ space: 14 }) {
-        if (this.proxyGroups.length > 0) {
+        if (this.activeProfileId.length === 0) {
+          this.EmptyCard('暂无配置', '请先新建配置，再选择和测试代理节点')
+          Button('新建配置')
+            .height(44)
+            .width('100%')
+            .fontSize(14)
+            .fontColor('#042F2E')
+            .backgroundColor(this.accentColor())
+            .borderRadius(10)
+            .onClick(() => {
+              this.selectSection(3);
+            })
+        } else {
+          if (this.proxyGroups.length > 0) {
           Scroll() {
             Row({ space: 8 }) {
               ForEach(this.proxyGroups, (group: ProxyGroup) => {
@@ -2321,9 +2449,9 @@ struct Index {
           .scrollable(ScrollDirection.Horizontal)
           .scrollBar(BarState.Off)
           .width('100%')
-        }
+          }
 
-        TextInput({ text: this.nodeSearchText, placeholder: '搜索节点、类型或地址' })
+          TextInput({ text: this.nodeSearchText, placeholder: '搜索节点、类型或地址' })
           .height(44)
           .width('100%')
           .fontSize(13)
@@ -2335,7 +2463,7 @@ struct Index {
             this.nodeSearchText = value;
           })
 
-        Row({ space: 10 }) {
+          Row({ space: 10 }) {
           Button(this.latencyBusy ? '测速中' : '测速全部')
             .height(42)
             .layoutWeight(1)
@@ -2358,26 +2486,28 @@ struct Index {
             .onClick(() => {
               this.testProxyLatency('group');
             })
+          }
+          .width('100%')
+
+          this.SectionTitle(this.getFilteredNodes().length.toString() + ' / ' +
+            this.getSelectedProxyGroupNodes().length.toString() + ' 个节点 · ' + this.selectedProxyGroupLabel(), '')
+
+          this.ProxyGroupSummary()
+
+          if (this.nodes.length === 0) {
+            this.EmptyCard('暂无节点', '请先在配置页更新或导入包含 proxies 的配置')
+          } else if (this.getFilteredNodes().length === 0) {
+            this.EmptyCard('无匹配节点', '请调整搜索关键字')
+          }
+
+          ForEach(this.getFilteredNodes(), (node: ProxyNode) => {
+            this.NodeRow(node)
+          }, (node: ProxyNode) => node.group + '-' + node.name + '-' + (node.selected ? 'selected' : 'idle') +
+            '-' + node.delay.toString())
         }
-        .width('100%')
-
-        this.SectionTitle(this.getFilteredNodes().length.toString() + ' / ' +
-          this.getSelectedProxyGroupNodes().length.toString() + ' 个节点 · ' + this.selectedProxyGroupLabel(), '')
-
-        this.ProxyGroupSummary()
-
-        if (this.nodes.length === 0) {
-          this.EmptyCard('暂无节点', '请先在配置页更新或导入包含 proxies 的配置')
-        } else if (this.getFilteredNodes().length === 0) {
-          this.EmptyCard('无匹配节点', '请调整搜索关键字')
-        }
-
-        ForEach(this.getFilteredNodes(), (node: ProxyNode) => {
-          this.NodeRow(node)
-        }, (node: ProxyNode) => node.group + '-' + node.name + '-' + (node.selected ? 'selected' : 'idle') +
-          '-' + node.delay.toString())
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .padding({ left: 20, right: 20, bottom: 28 })
     }
     .scrollable(ScrollDirection.Vertical)
@@ -2509,7 +2639,9 @@ struct Index {
 
         Scroll() {
           Column({ space: 14 }) {
-            this.YamlEditorPanel()
+            if (this.profiles.length > 0) {
+              this.YamlEditorPanel()
+            }
           }
           .padding({ right: 20, bottom: 28 })
         }
@@ -2523,9 +2655,12 @@ struct Index {
         Column({ space: 14 }) {
           this.ProfileListPanel()
           this.SubscriptionPanel()
-          this.YamlEditorPanel()
+          if (this.profiles.length > 0) {
+            this.YamlEditorPanel()
+          }
         }
         .width('100%')
+        .constraintSize({ minHeight: '100%' })
         .padding({ left: 20, right: 20, bottom: 28 })
       }
       .scrollable(ScrollDirection.Vertical)
@@ -2562,6 +2697,23 @@ struct Index {
       ForEach(this.profiles, (p: Profile) => {
         this.ProfileRow(p)
       }, (p: Profile) => p.id)
+
+      if (this.profiles.length === 0) {
+        Column({ space: 6 }) {
+          Text('暂无配置')
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryText())
+          Text('新建配置后即可连接 VPN')
+            .fontSize(12)
+            .fontColor(this.secondaryText())
+        }
+        .height(84)
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor(this.surfaceBg())
+        .borderRadius(12)
+      }
 
       if (this.subStatus.length > 0) {
         Text(this.localizedMessage(this.subStatus))
@@ -2853,6 +3005,7 @@ struct Index {
         .borderRadius(12)
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .padding({ left: 20, right: 20, bottom: 28 })
     }
     .scrollable(ScrollDirection.Vertical)
@@ -2900,6 +3053,7 @@ struct Index {
         this.YamlEditorPanel()
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .padding({ left: 20, right: 20, bottom: 28 })
     }
     .scrollable(ScrollDirection.Vertical)
@@ -2977,6 +3131,7 @@ struct Index {
         }, (event: RuntimeEvent) => event.timestamp.toString() + event.message)
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .padding({ left: 20, right: 20, bottom: 28 })
     }
     .scrollable(ScrollDirection.Vertical)
@@ -3062,6 +3217,7 @@ struct Index {
         })
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .padding({ left: 20, right: 20, bottom: 28 })
     }
     .scrollable(ScrollDirection.Vertical)
@@ -3271,6 +3427,7 @@ struct Index {
         }
       }
       .width('100%')
+      .constraintSize({ minHeight: '100%' })
       .padding({ left: 20, right: 20, bottom: 28 })
     }
     .scrollable(ScrollDirection.Vertical)
@@ -3311,6 +3468,8 @@ struct Index {
       this.DiagCard('帮助', '配置页用于管理 Clash/mihomo YAML 或 URL 订阅。', '连接后首页会展示状态、节点和运行事件。')
     }
     .width('100%')
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
     .padding(20)
     .backgroundColor(this.appBg())
   }
@@ -3321,6 +3480,8 @@ struct Index {
         this.runtimeStateLabel(this.statusText) + ' · 核心：' + this.coreStateLabel(this.coreText))
     }
     .width('100%')
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Start)
     .padding(20)
     .backgroundColor(this.appBg())
   }
@@ -3473,8 +3634,24 @@ struct Index {
     })
   }
 
+  @Builder EdgeBackGestureArea() {
+    Row()
+      .width(28)
+      .height('100%')
+      .backgroundColor('#01000000')
+      .zIndex(100)
+      .gesture(
+        PanGesture({ fingers: 1, direction: PanDirection.Horizontal, distance: 8 })
+          .onActionEnd((event: GestureEvent) => {
+            if (event.offsetX >= 72 && Math.abs(event.offsetY) <= 60) {
+              this.navigateBack();
+            }
+          })
+      )
+  }
+
   build() {
-    Stack() {
+    Stack({ alignContent: Alignment.TopStart }) {
       if (this.isTabletLayout()) {
         Row() {
           this.TabletSidebar()
@@ -3502,6 +3679,10 @@ struct Index {
 
       if (this.sheetVisible) {
         this.ProfileActionSheet()
+      }
+
+      if (!this.isTabletLayout() && (this.selectedSectionIndex !== 0 || this.sheetVisible)) {
+        this.EdgeBackGestureArea()
       }
     }
     .height('100%')
