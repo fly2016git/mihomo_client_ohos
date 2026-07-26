@@ -458,6 +458,22 @@ struct Index {
     return '首页';
   }
 
+  private navIcon(index: number): Resource {
+    if (index === 0) {
+      return $r('sys.symbol.house');
+    }
+    if (index === 1) {
+      return $r('sys.symbol.wifi_router');
+    }
+    if (index === 2) {
+      return $r('sys.symbol.doc_plaintext');
+    }
+    if (index === 4) {
+      return $r('sys.symbol.list_bullet');
+    }
+    return $r('sys.symbol.gearshape');
+  }
+
   private selectSection(index: number): void {
     if (index === this.selectedSectionIndex) {
       this.sheetVisible = false;
@@ -528,10 +544,6 @@ struct Index {
     return '⊘';
   }
 
-  private statusTitleText(): string {
-    return this.runtimeStateLabel(this.statusText);
-  }
-
   private statusSubtitleText(): string {
     if (this.activeProfileId.length === 0) {
       return '请先创建配置';
@@ -546,19 +558,9 @@ struct Index {
       return this.lastError.length > 0 ? this.localizedMessage(this.lastError) : '请查看日志';
     }
     if (this.statusText === 'Unknown') {
-      return '点此重新确认或断开';
+      return '运行状态待确认';
     }
-    return '点此启动';
-  }
-
-  private toggleRuntime(): void {
-    if (this.canConnect()) {
-      this.connect();
-      return;
-    }
-    if (this.canDisconnect()) {
-      this.disconnect();
-    }
+    return '';
   }
 
   private formatBytes(value: number): string {
@@ -1945,8 +1947,8 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.accentColor())
       }
-      .width(38)
-      .height(38)
+      .width(34)
+      .height(34)
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
       .backgroundColor('#172B30')
@@ -1954,11 +1956,11 @@ struct Index {
 
       Column({ space: 2 }) {
         Text(this.selectedSectionIndex === 0 ? 'FlowGuard' : this.currentSectionLabel())
-          .fontSize(20)
+          .fontSize(19)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryText())
           .maxLines(1)
-        Text('v0.1 · MVP-01 · ' + this.activeProfileLabel())
+        Text('当前配置 · ' + this.activeProfileLabel())
           .fontSize(11)
           .fontColor(this.mutedText())
           .maxLines(1)
@@ -1968,7 +1970,7 @@ struct Index {
       .layoutWeight(1)
 
       Button('诊断')
-        .height(36)
+        .height(34)
         .fontSize(12)
         .fontColor(this.accentColor())
         .backgroundColor(this.elevatedBg())
@@ -1978,8 +1980,8 @@ struct Index {
         })
     }
     .width('100%')
-    .height(68)
-    .padding({ left: 20, right: 20, top: 10, bottom: 10 })
+    .height(60)
+    .padding({ left: 20, right: 20, top: 8, bottom: 8 })
     .backgroundColor(this.appBg())
   }
 
@@ -1989,8 +1991,10 @@ struct Index {
         Row({ space: 18 }) {
           Column({ space: 16 }) {
             this.ConnectionHero()
-            this.MainActions()
             this.StatusPills()
+            if (this.lastError.length > 0) {
+              this.ErrorBanner()
+            }
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Center)
@@ -2019,7 +2023,6 @@ struct Index {
             this.CurrentProxyCard()
             this.TrafficRow()
           }
-          this.MainActions()
           this.ProfileChipsSection()
           this.RouteModeSection()
           this.EventSection()
@@ -2037,50 +2040,96 @@ struct Index {
 
   @Builder ConnectionHero() {
     Column({ space: 10 }) {
-      Column() {
+      Row({ space: 16 }) {
         Column() {
-          Text(this.statusIconText())
-            .fontSize(44)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.stateAccentColor())
+          Column() {
+            Text(this.statusIconText())
+              .fontSize(34)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.stateAccentColor())
+          }
+          .width(72)
+          .height(72)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+          .backgroundColor(this.statusText === 'Connected' ? '#16302F' : this.elevatedBg())
+          .borderRadius(36)
         }
-        .width(112)
-        .height(112)
+        .width(104)
+        .height(104)
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Center)
-        .backgroundColor(this.statusText === 'Connected' ? '#16302F' : this.elevatedBg())
-        .borderRadius(56)
-      }
-      .width(148)
-      .height(148)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .backgroundColor(this.surfaceBg())
-      .borderRadius(74)
-      .onClick(() => {
-        this.toggleRuntime();
-      })
+        .backgroundColor(this.surfaceBg())
+        .borderRadius(52)
+        .border({ width: 2, color: this.stateAccentColor() })
 
-      Text(this.statusTitleText())
-        .fontSize(25)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(this.primaryText())
-        .maxLines(1)
-      Text(this.statusSubtitleText())
-        .fontSize(13)
-        .fontColor(this.secondaryText())
-        .maxLines(2)
-        .textAlign(TextAlign.Center)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text(this.activeProfileLabel() + ' · ' + this.routeModeLabel(this.appSettings.routeMode))
-        .fontSize(11)
-        .fontColor(this.mutedText())
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Column({ space: 8 }) {
+          if (this.canConnect()) {
+            this.ActiveActionButton('连接', false, () => {
+              this.connect();
+            })
+          } else {
+            this.DisabledActionButton('连接')
+          }
+          if (this.canDisconnect()) {
+            this.ActiveActionButton('断开', true, () => {
+              this.disconnect();
+            })
+          } else {
+            this.DisabledActionButton('断开')
+          }
+        }
+        .layoutWeight(1)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      if (this.statusSubtitleText().length > 0) {
+        Text(this.statusSubtitleText())
+          .fontSize(12)
+          .fontColor(this.secondaryText())
+          .width('100%')
+          .maxLines(2)
+          .textAlign(TextAlign.Center)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
     }
     .width('100%')
-    .padding({ top: 8, bottom: 4 })
+    .padding({ top: 4, bottom: 2 })
     .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder ActiveActionButton(label: string, danger: boolean, action: () => void) {
+    Row() {
+      Text(label)
+        .fontSize(16)
+        .fontWeight(danger ? FontWeight.Medium : FontWeight.Bold)
+        .fontColor(danger ? this.dangerColor() : '#042F2E')
+    }
+    .width('100%')
+    .height(48)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(danger ? '#2B1B22' : this.accentColor())
+    .borderRadius(12)
+    .border({ width: 1, color: danger ? '#55303A' : this.accentColor() })
+    .onClick(action)
+  }
+
+  @Builder DisabledActionButton(label: string) {
+    Row() {
+      Text(label)
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#7D8998')
+    }
+    .width('100%')
+    .height(48)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor('#242E3A')
+    .borderRadius(12)
+    .border({ width: 1, color: '#3A4757' })
   }
 
   @Builder StatusPills() {
@@ -2095,7 +2144,9 @@ struct Index {
           .maxLines(1)
       }
       .height(30)
-      .padding({ left: 10, right: 10 })
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+      .padding({ left: 6, right: 6 })
       .backgroundColor(this.elevatedBg())
       .borderRadius(15)
 
@@ -2109,7 +2160,9 @@ struct Index {
           .maxLines(1)
       }
       .height(30)
-      .padding({ left: 10, right: 10 })
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+      .padding({ left: 6, right: 6 })
       .backgroundColor(this.elevatedBg())
       .borderRadius(15)
 
@@ -2123,28 +2176,13 @@ struct Index {
           .maxLines(1)
       }
       .height(30)
-      .padding({ left: 10, right: 10 })
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Center)
+      .padding({ left: 6, right: 6 })
       .backgroundColor(this.elevatedBg())
       .borderRadius(15)
     }
     .width('100%')
-    .justifyContent(FlexAlign.Center)
-  }
-
-  @Builder StatusPill(label: string, color: string) {
-    Row({ space: 6 }) {
-      Text('●')
-        .fontSize(8)
-        .fontColor(color)
-      Text(label)
-        .fontSize(11)
-        .fontColor(this.secondaryText())
-        .maxLines(1)
-    }
-    .height(30)
-    .padding({ left: 10, right: 10 })
-    .backgroundColor(this.elevatedBg())
-    .borderRadius(15)
   }
 
   @Builder ErrorBanner() {
@@ -2235,45 +2273,6 @@ struct Index {
     .borderRadius(12)
   }
 
-  @Builder MainActions() {
-    Row({ space: 10 }) {
-      Button('连接')
-        .height(48)
-        .layoutWeight(1)
-        .fontSize(16)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#042F2E')
-        .backgroundColor(this.canConnect() ? this.accentColor() : '#31514F')
-        .borderRadius(14)
-        .enabled(this.canConnect())
-        .onClick(() => {
-          this.connect();
-        })
-      Button('断开')
-        .height(48)
-        .layoutWeight(1)
-        .fontSize(16)
-        .fontColor(this.dangerColor())
-        .backgroundColor(this.canDisconnect() ? '#2B1B22' : this.elevatedBg())
-        .borderRadius(14)
-        .enabled(this.canDisconnect())
-        .onClick(() => {
-          this.disconnect();
-        })
-      Button('重载')
-        .height(48)
-        .width(68)
-        .fontSize(13)
-        .fontColor(this.secondaryText())
-        .backgroundColor(this.elevatedBg())
-        .borderRadius(14)
-        .onClick(() => {
-          this.refreshActiveConfig();
-        })
-    }
-    .width('100%')
-  }
-
   @Builder ProfileChipsSection() {
     Column({ space: 8 }) {
       this.SectionTitle('配置', '')
@@ -2294,6 +2293,35 @@ struct Index {
         .borderRadius(10)
         .onClick(() => {
           this.selectSection(3);
+        })
+      } else if (this.profiles.length === 1) {
+        Row({ space: 10 }) {
+          Column({ space: 4 }) {
+            Text(this.profileNameLabel(this.profiles[0]))
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.accentColor())
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text((this.profiles[0].type === 'subscription' ? '订阅' : '本地') + ' · ' +
+              this.profileRuleText(this.profiles[0]) + ' · 当前')
+              .fontSize(11)
+              .fontColor('#78E2D5')
+              .maxLines(1)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          Text('>')
+            .fontSize(16)
+            .fontColor(this.mutedText())
+        }
+        .height(58)
+        .width('100%')
+        .padding({ left: 12, right: 12 })
+        .backgroundColor('#17302F')
+        .borderRadius(10)
+        .onClick(() => {
+          this.selectSection(2);
         })
       } else {
         Scroll() {
@@ -2357,15 +2385,23 @@ struct Index {
     Column({ space: 8 }) {
       this.SectionTitle('运行事件', '查看全部')
       Column() {
-        ForEach(this.runtimeEvents.slice(0, 4), (event: RuntimeEvent) => {
-          Text(this.eventLineText(event))
+        if (this.runtimeEvents.length === 0) {
+          Text('暂无运行事件')
             .fontSize(12)
-            .fontColor(this.secondaryText())
+            .fontColor(this.mutedText())
             .width('100%')
-            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }, (event: RuntimeEvent) => event.timestamp.toString() + event.message)
+            .padding(12)
+        } else {
+          ForEach(this.runtimeEvents.slice(0, 1), (event: RuntimeEvent) => {
+            Text(this.eventLineText(event))
+              .fontSize(12)
+              .fontColor(this.secondaryText())
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }, (event: RuntimeEvent) => event.timestamp.toString() + event.message)
+        }
       }
       .width('100%')
       .backgroundColor(this.surfaceBg())
@@ -2380,13 +2416,13 @@ struct Index {
   @Builder SectionTitle(title: string, action: string) {
     Row() {
       Text(title)
-        .fontSize(11)
+        .fontSize(12)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.mutedText())
         .layoutWeight(1)
       if (action.length > 0) {
         Text(action)
-          .fontSize(11)
+          .fontSize(12)
           .fontColor(this.accentColor())
           .onClick(() => {
             if (title === '运行事件') {
@@ -3572,9 +3608,10 @@ struct Index {
       this.NavItem(4, '日志')
       this.NavItem(5, '设置')
     }
-    .height(66)
+    .height(70)
     .width('100%')
-    .padding({ left: 8, right: 8, bottom: 6 })
+    .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+    .alignItems(VerticalAlign.Center)
     .backgroundColor(this.appBg())
   }
 
@@ -3600,17 +3637,40 @@ struct Index {
   }
 
   @Builder NavItem(index: number, label: string) {
-    Column({ space: 2 }) {
-      Text(label)
-        .fontSize(12)
-        .fontColor(this.selectedSectionIndex === index ? this.accentColor() : this.secondaryText())
-        .maxLines(1)
+    Column() {
+      Column({ space: 2 }) {
+        Row()
+          .width(22)
+          .height(3)
+          .backgroundColor(this.selectedSectionIndex === index ? this.accentColor() : '#00000000')
+          .borderRadius(2)
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(this.navIcon(index))
+            .fontSize(20)
+            .fontWeight(FontWeight.Medium)
+            .fontColor([this.selectedSectionIndex === index ? this.accentColor() : this.secondaryText()])
+        }
+        .width(32)
+        .height(24)
+        Text(label)
+          .fontSize(12)
+          .lineHeight(18)
+          .fontColor(this.selectedSectionIndex === index ? this.accentColor() : this.secondaryText())
+          .width(56)
+          .height(18)
+          .textAlign(TextAlign.Center)
+          .maxLines(1)
+      }
+      .width(56)
+      .height(51)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
     }
     .layoutWeight(1)
-    .height(48)
+    .height(54)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor(this.selectedSectionIndex === index ? '#17302F' : '#00000000')
-    .borderRadius(12)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#00000000')
     .onClick(() => {
       this.selectSection(index);
     })
