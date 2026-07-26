@@ -2,35 +2,35 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "ClashGuard VPN 客户端"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "管理 mihomo 配置并建立 VPN 连接"
     },
     {
       "name": "EntryAbility_label",
-      "value": "label"
+      "value": "ClashGuard"
     },
     {
       "name": "vpn_extension_label",
-      "value": "Mihomo POC VPN"
+      "value": "ClashGuard VPN"
     },
     {
       "name": "vpn_extension_desc",
-      "value": "VPN TUN capability proof of concept"
+      "value": "处理设备 VPN 网络流量"
     },
     {
       "name": "background_running_reason",
-      "value": "Required to keep VPN traffic processing active in the background"
+      "value": "用于在 VPN 连接期间持续处理网络流量"
     },
     {
       "name": "internet_reason",
-      "value": "Required for later VPN traffic validation"
+      "value": "用于更新订阅并访问代理服务器"
     },
     {
       "name": "network_info_reason",
-      "value": "Required to observe network state during VPN validation"
+      "value": "用于获取 VPN 连接所需的网络状态"
     }
   ]
 }

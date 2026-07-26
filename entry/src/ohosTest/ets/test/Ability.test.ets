@@ -1,35 +1,43 @@
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { describe, beforeAll, beforeEach, afterEach, afterAll, it, expect } from '@ohos/hypium';
+import { describe, it, expect } from '@ohos/hypium';
+import { abilityDelegatorRegistry } from '@kit.TestKit';
+import fs from '@ohos.file.fs';
+import { ConfigService } from '../../../main/ets/config/ConfigService';
+import { DEFAULT_APP_SETTINGS, makeSubscriptionMeta } from '../../../main/ets/models/MvpTypes';
+import { SubscriptionUrlPolicy } from '../../../main/ets/subscription/SubscriptionUrlPolicy';
 
 export default function abilityTest() {
-  describe('ActsAbilityTest', () => {
-    // Defines a test suite. Two parameters are supported: test suite name and test suite function.
-    beforeAll(() => {
-      // Presets an action, which is performed only once before all test cases of the test suite start.
-      // This API supports only one parameter: preset action function.
-    })
-    beforeEach(() => {
-      // Presets an action, which is performed before each unit test case starts.
-      // The number of execution times is the same as the number of test cases defined by **it**.
-      // This API supports only one parameter: preset action function.
-    })
-    afterEach(() => {
-      // Presets a clear action, which is performed after each unit test case ends.
-      // The number of execution times is the same as the number of test cases defined by **it**.
-      // This API supports only one parameter: clear action function.
-    })
-    afterAll(() => {
-      // Presets a clear action, which is performed after all test cases of the test suite end.
-      // This API supports only one parameter: clear action function.
-    })
-    it('assertContain', 0, () => {
-      // Defines a test case. This API supports three parameters: test case name, filter parameter, and test case function.
-      hilog.info(0x0000, 'testTag', '%{public}s', 'it begin');
-      let a = 'abc';
-      let b = 'b';
-      // Defines a variety of assertion methods, which are used to declare expected boolean conditions.
-      expect(a).assertContain(b);
-      expect(a).assertEqual(a);
-    })
-  })
+  describe('ClashGuard device policy tests', () => {
+    it('uses the recommended defaults', 0, () => {
+      expect(DEFAULT_APP_SETTINGS.routeMode).assertEqual('blocking-default');
+      expect(DEFAULT_APP_SETTINGS.proxyMode).assertEqual('rule');
+    });
+
+    it('initializes subscription state without stale errors', 0, () => {
+      const meta = makeSubscriptionMeta('https://example.com/config.yaml');
+      expect(meta.failureCount).assertEqual(0);
+      expect(meta.lastStatusCode).assertEqual(0);
+      expect(meta.lastError).assertEqual('');
+    });
+
+    it('enforces secure subscription transport', 0, () => {
+      expect(SubscriptionUrlPolicy.validate('https://example.com/config.yaml').ok).assertTrue();
+      expect(SubscriptionUrlPolicy.validate('http://example.com/config.yaml').ok).assertFalse();
+    });
+
+    it('restores a damaged profile index from backup', 0, () => {
+      const context = abilityDelegatorRegistry.getAbilityDelegator().getAppContext();
+      const root = context.filesDir + '/profile-recovery-test-' + Date.now().toString();
+      const service = new ConfigService(root);
+      const profile = service.createLocalProfile('恢复测试',
+        'mode: rule\nproxies: []\nproxy-groups: []\nrules:\n  - MATCH,DIRECT\n');
+      const layout = service.ensureLayout();
+      service.writeTextFile(layout.profilesPath, '{invalid json');
+
+      const recovered = service.loadProfilesState();
+      const stateFiles = fs.listFileSync(layout.stateDir);
+      expect(recovered.activeProfileId).assertEqual(profile.id);
+      expect(recovered.profiles.length).assertEqual(1);
+      expect(stateFiles.some((name: string) => name.startsWith('profiles.json.corrupt-'))).assertTrue();
+    });
+  });
 }

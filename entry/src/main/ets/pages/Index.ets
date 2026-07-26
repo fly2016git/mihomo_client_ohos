@@ -567,7 +567,7 @@ struct Index {
 
   private statusSubtitleText(): string {
     if (this.activeProfileId.length === 0) {
-      return '请先创建配置';
+      return '';
     }
     if (this.statusText === 'Connected') {
       return this.formatBytes(this.uploadSpeed + this.downloadSpeed) + ' 已转发';
@@ -1133,6 +1133,14 @@ struct Index {
     if (profileId === this.activeProfileId) {
       return;
     }
+    if (!this.canChangeStoredData()) {
+      this.subStatus = '请先断开 VPN 再切换配置';
+      this.validationText = '请先断开 VPN 再切换配置';
+      if (this.runtimeStore) {
+        this.runtimeStore.appendEvent('Profile switch rejected while VPN is active', 'warn', 'config');
+      }
+      return;
+    }
     const profile = this.configService.setActiveProfile(profileId);
     if (profile) {
       this.activeProfileId = profile.id;
@@ -1321,7 +1329,7 @@ struct Index {
     if (!result.ok) {
       return result.errors.join('; ');
     }
-    const warnings = result.warnings.filter((item: string) => item.indexOf('MVP-01A') < 0);
+    const warnings = result.warnings;
     if (warnings.length > 0) {
       return '校验通过，警告: ' + warnings.join('; ');
     }
@@ -2014,7 +2022,7 @@ struct Index {
   @Builder AppHeader() {
     Row({ space: 12 }) {
       Column() {
-        Text('FG')
+        Text('CG')
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.accentColor())
@@ -2027,7 +2035,7 @@ struct Index {
       .borderRadius(10)
 
       Column({ space: 2 }) {
-        Text(this.selectedSectionIndex === 0 ? 'FlowGuard' : this.currentSectionLabel())
+        Text(this.selectedSectionIndex === 0 ? 'ClashGuard' : this.currentSectionLabel())
           .fontSize(19)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryText())
@@ -2063,44 +2071,54 @@ struct Index {
         Row({ space: 18 }) {
           Column({ space: 16 }) {
             this.ConnectionHero()
-            this.StatusPills()
-            if (this.lastError.length > 0) {
-              this.ErrorBanner()
+            if (this.activeProfileId.length > 0) {
+              this.StatusPills()
+              if (this.lastError.length > 0) {
+                this.ErrorBanner()
+              }
             }
           }
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Center)
 
           Column({ space: 14 }) {
-            if (this.activeProfileId.length > 0) {
+            if (this.activeProfileId.length === 0) {
+              this.FirstConfigPrompt()
+            } else {
               this.CurrentProxyCard()
               this.TrafficRow()
+              this.ProfileChipsSection()
+              this.RouteModeSection()
+              this.EventSection()
             }
-            this.ProfileChipsSection()
-            this.RouteModeSection()
-            this.EventSection()
           }
           .layoutWeight(1)
         }
         .width('100%')
-        .padding({ left: 20, right: 20, bottom: 28 })
+        .constraintSize({ minHeight: '100%' })
+        .alignItems(VerticalAlign.Top)
+        .padding({ left: 20, right: 20, top: 12, bottom: 28 })
       } else {
         Column({ space: 16 }) {
           this.ConnectionHero()
-          this.StatusPills()
-          if (this.lastError.length > 0) {
-            this.ErrorBanner()
-          }
-          if (this.activeProfileId.length > 0) {
+          if (this.activeProfileId.length === 0) {
+            this.FirstConfigPrompt()
+          } else {
+            this.StatusPills()
+            if (this.lastError.length > 0) {
+              this.ErrorBanner()
+            }
             this.CurrentProxyCard()
             this.TrafficRow()
+            this.ProfileChipsSection()
+            this.RouteModeSection()
+            this.EventSection()
           }
-          this.ProfileChipsSection()
-          this.RouteModeSection()
-          this.EventSection()
         }
         .width('100%')
-        .padding({ left: 20, right: 20, bottom: 28 })
+        .constraintSize({ minHeight: '100%' })
+        .justifyContent(FlexAlign.Start)
+        .padding({ left: 20, right: 20, top: 12, bottom: 28 })
       }
     }
     .scrollable(ScrollDirection.Vertical)
@@ -2108,6 +2126,65 @@ struct Index {
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
+  }
+
+  @Builder FirstConfigPrompt() {
+    Column({ space: 16 }) {
+      Row({ space: 12 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.doc_plaintext'))
+            .fontSize(25)
+            .fontWeight(FontWeight.Medium)
+            .fontColor([this.accentColor()])
+        }
+        .width(48)
+        .height(48)
+        .backgroundColor('#17302F')
+        .borderRadius(12)
+
+        Column({ space: 4 }) {
+          Text('添加首个配置')
+            .fontSize(17)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.primaryText())
+            .width('100%')
+          Text('支持订阅链接、本地文件和二维码导入')
+            .fontSize(12)
+            .fontColor(this.secondaryText())
+            .width('100%')
+            .maxLines(2)
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+      }
+      .width('100%')
+
+      Button() {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.doc_plaintext'))
+            .fontSize(17)
+            .fontColor(['#042F2E'])
+          Text('添加配置')
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#042F2E')
+        }
+        .justifyContent(FlexAlign.Center)
+      }
+      .height(46)
+      .width('100%')
+      .backgroundColor(this.accentColor())
+      .borderRadius(10)
+      .onClick(() => {
+        this.subStatus = '';
+        this.createMode = 1;
+        this.selectSection(3);
+      })
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor(this.surfaceBg())
+    .borderRadius(12)
   }
 
   @Builder ConnectionHero() {
@@ -3319,7 +3396,7 @@ struct Index {
         this.SettingsActionRow('帮助', '配置、连接与诊断说明', '查看', () => {
           this.selectSection(6);
         })
-        this.SettingsActionRow('FlowGuard', 'v0.1 · MVP-01', '关于', () => {
+        this.SettingsActionRow('ClashGuard', 'v1.0.0', '关于', () => {
           this.selectSection(7);
         })
         this.SettingsGroup('存储')
@@ -3593,14 +3670,24 @@ struct Index {
   }
 
   @Builder AboutPage() {
-    Column({ space: 12 }) {
-      this.DiagCard('FlowGuard', 'HarmonyOS mihomo 客户端原型', '运行状态：' +
-        this.runtimeStateLabel(this.statusText) + ' · 核心：' + this.coreStateLabel(this.coreText))
+    Scroll() {
+      Column({ space: 12 }) {
+        this.DiagCard('ClashGuard', '版本 1.0.0', '基于 mihomo 的 HarmonyOS VPN 客户端')
+        this.DiagCard('隐私政策', '应用不收集账号、设备标识或使用统计。',
+          '订阅地址仅用于用户主动更新；诊断文件仅在用户主动操作时生成。')
+        this.DiagCard('开源许可', 'ClashGuard：GNU AGPL v3', 'mihomo 核心：GNU GPL v3')
+        this.DiagCard('版权与担保', '© 2026 ClashGuard contributors', '本软件按“原样”提供，不附带任何担保。')
+        this.DiagCard('源代码', 'github.com/fly2016git/mihomo_client_ohos',
+          '完整隐私政策：仓库根目录 PRIVACY.md')
+      }
+      .width('100%')
+      .constraintSize({ minHeight: '100%' })
+      .padding({ left: 20, right: 20, bottom: 28 })
     }
+    .scrollable(ScrollDirection.Vertical)
+    .scrollBar(BarState.Off)
     .width('100%')
     .layoutWeight(1)
-    .alignItems(HorizontalAlign.Start)
-    .padding(20)
     .backgroundColor(this.appBg())
   }
 
@@ -3844,7 +3931,7 @@ struct Index {
 
   @Builder TabletSidebar() {
     Column({ space: 8 }) {
-      Text('FG')
+      Text('CG')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.accentColor())

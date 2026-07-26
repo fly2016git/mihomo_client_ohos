@@ -15,3 +15,9 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
+
+# Signing material and developer-local signing configuration
+*.p12
+*.p7b
+*.cer
+build-profile.local.json5

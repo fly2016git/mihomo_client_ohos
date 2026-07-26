@@ -5,6 +5,7 @@ import { ConfigService } from '../config/ConfigService';
 import { ConfigValidationService } from '../config/ConfigValidationService';
 import { Profile, SubscriptionMeta, SubscriptionUpdateResult, makeSubscriptionMeta } from '../models/MvpTypes';
 import { SettingsService } from '../settings/SettingsService';
+import { SubscriptionUrlPolicy } from './SubscriptionUrlPolicy';
 
 const MAX_REDIRECTS = 5;
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MiB
@@ -28,22 +29,16 @@ export class SubscriptionService {
   }
 
   validateUrl(url: string): string | null {
-    if (url.trim().length === 0) {
-      return 'SUBSCRIPTION_INVALID_URL: URL 不能为空';
-    }
-    const lower = url.trim().toLowerCase();
-    if (!lower.startsWith('http://') && !lower.startsWith('https://')) {
-      return 'SUBSCRIPTION_UNSUPPORTED_SCHEME: 仅支持 http/https';
-    }
-    return null;
+    const result = SubscriptionUrlPolicy.validate(url);
+    return result.ok ? null : result.error;
   }
 
   async addSubscription(name: string, url: string): Promise<Profile> {
-    const error = this.validateUrl(url);
-    if (error) {
-      throw new Error(error);
+    const check = SubscriptionUrlPolicy.validate(url);
+    if (!check.ok) {
+      throw new Error(check.error);
     }
-    return this.configService.createSubscriptionProfile(name, url);
+    return this.configService.createSubscriptionProfile(name, check.normalizedUrl);
   }
 
   async addSubscriptionAndUpdate(name: string, url: string): Promise<SubscriptionCreateResult> {
@@ -75,6 +70,11 @@ export class SubscriptionService {
     }
 
     const url = profile.subscription.url;
+    const urlCheck = SubscriptionUrlPolicy.validate(url);
+    if (!urlCheck.ok) {
+      this.recordFailure(profile, 0, urlCheck.error);
+      return this.makeResult(profileId, false, urlCheck.error, 0, 0);
+    }
     const userAgent = profile.subscription.userAgent && profile.subscription.userAgent.length > 0 ?
       profile.subscription.userAgent : DEFAULT_USER_AGENT;
     const layout = this.configService.ensureLayout();
@@ -89,9 +89,9 @@ export class SubscriptionService {
     let responseBody = '';
     let finalResponseResult: string | ArrayBuffer | Object | null = null;
 
+    const httpRequest = http.createHttp();
     try {
-      const httpRequest = http.createHttp();
-      let currentUrl = url;
+      let currentUrl = urlCheck.normalizedUrl;
       let redirects = 0;
       let lastResponseResult: string | ArrayBuffer | Object = '';
 
@@ -103,7 +103,8 @@ export class SubscriptionService {
             'Accept': 'text/plain, application/yaml, application/x-yaml, */*'
           },
           connectTimeout: TIMEOUT_MS,
-          readTimeout: TIMEOUT_MS
+          readTimeout: TIMEOUT_MS,
+          maxLimit: MAX_BYTES
         });
 
         statusCode = httpResponse.responseCode;
@@ -112,7 +113,12 @@ export class SubscriptionService {
           this.getHeaderValue(httpResponse.header, 'location');
 
         if ((statusCode === 301 || statusCode === 302 || statusCode === 307 || statusCode === 308) && location) {
-          currentUrl = location;
+          const redirect = SubscriptionUrlPolicy.validateRedirect(location, currentUrl);
+          if (!redirect.ok) {
+            this.recordFailure(profile, statusCode, redirect.error);
+            return this.makeResult(profileId, false, redirect.error, statusCode, 0);
+          }
+          currentUrl = redirect.normalizedUrl;
           redirects++;
           continue;
         }
@@ -149,7 +155,7 @@ export class SubscriptionService {
       } else if (finalResponseResult instanceof ArrayBuffer) {
         const textDecoder = util.TextDecoder.create('utf-8');
         const arr = new Uint8Array(finalResponseResult as ArrayBuffer);
-        responseBody = textDecoder.decodeWithStream(arr, { stream: false }) as string;
+        responseBody = textDecoder.decodeToString(arr);
         bodyBytes = (finalResponseResult as ArrayBuffer).byteLength;
       } else {
         responseBody = JSON.stringify(finalResponseResult);
@@ -169,12 +175,19 @@ export class SubscriptionService {
       }
 
     } catch (err) {
-      const errMsg = 'SUBSCRIPTION_DOWNLOAD_FAILED: ' + this.toErrorText(err);
+      const errMsg = 'SUBSCRIPTION_DOWNLOAD_FAILED: ' + this.redactSensitiveText(this.toErrorText(err));
       this.recordFailure(profile, 0, errMsg);
       return this.makeResult(profileId, false, errMsg, 0, 0);
+    } finally {
+      try {
+        httpRequest.destroy();
+      } catch (_) {
+        // The completed request result remains valid even if native resource cleanup reports an error.
+      }
     }
 
     // --- Validate and Atomically Replace ---
+    let runtimeTmp = '';
     try {
       // Write temp file
       this.writeTextFile(tmpPath, responseBody);
@@ -190,7 +203,7 @@ export class SubscriptionService {
 
       // Generate runtime YAML
       const runtimeYaml = this.configService.generateRuntimeYaml(responseBody, this.settingsService.load());
-      const runtimeTmp = profile.runtimePath + '.tmp';
+      runtimeTmp = profile.runtimePath + '.tmp';
 
       // Write runtime tmp
       this.writeTextFile(runtimeTmp, runtimeYaml);
@@ -228,7 +241,10 @@ export class SubscriptionService {
       };
     } catch (err) {
       this.deleteIfExists(tmpPath);
-      const errMsg = 'SUBSCRIPTION_WRITE_FAILED: ' + this.toErrorText(err);
+      if (runtimeTmp.length > 0) {
+        this.deleteIfExists(runtimeTmp);
+      }
+      const errMsg = 'SUBSCRIPTION_WRITE_FAILED: ' + this.redactSensitiveText(this.toErrorText(err));
       this.recordFailure(profile, statusCode, errMsg);
       return this.makeResult(profileId, false, errMsg, statusCode, bodyBytes);
     }
@@ -314,5 +330,9 @@ export class SubscriptionService {
       return err.name + ': ' + err.message;
     }
     return JSON.stringify(err);
+  }
+
+  private redactSensitiveText(text: string): string {
+    return text.replace(/https?:\/\/[^\s'\"<>]+/gi, '<redacted-url>');
   }
 }

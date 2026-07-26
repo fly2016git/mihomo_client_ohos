@@ -1,4 +1,5 @@
 import fs from '@ohos.file.fs';
+import urlModule from '@ohos.url';
 import { ConfigService } from '../config/ConfigService';
 import {
   AppSettings,
@@ -56,10 +57,10 @@ export class RuntimeStore {
       state.snapshot.startedAt = patch.startedAt;
     }
     if (patch.lastError !== undefined) {
-      state.snapshot.lastError = patch.lastError;
+      state.snapshot.lastError = this.redactSensitiveText(patch.lastError);
     }
     if (patch.lastEvent !== undefined) {
-      state.snapshot.lastEvent = patch.lastEvent;
+      state.snapshot.lastEvent = this.redactSensitiveText(patch.lastEvent);
     }
     if (patch.uploadSpeed !== undefined) {
       state.snapshot.uploadSpeed = patch.uploadSpeed;
@@ -82,18 +83,19 @@ export class RuntimeStore {
 
   appendEvent(message: string, level?: RuntimeEventLevel, source?: RuntimeEventSource): void {
     const state = this.loadStateFile();
+    const safeMessage = this.redactSensitiveText(message);
     const event: RuntimeEvent = {
       timestamp: Date.now(),
       level: level ?? this.inferLevel(message),
       source: source ?? this.inferSource(message),
-      message
+      message: safeMessage
     };
     const line = this.formatEvent(event);
     state.runtimeEvents = [event].concat(state.runtimeEvents).slice(0, MAX_EVENTS);
     state.events = [line].concat(state.events).slice(0, MAX_EVENTS);
-    state.snapshot.lastEvent = message;
+    state.snapshot.lastEvent = safeMessage;
     if (event.level === 'error') {
-      state.snapshot.lastError = message;
+      state.snapshot.lastError = safeMessage;
     }
     state.snapshot.updatedAt = Date.now();
     this.saveStateFile(state);
@@ -129,11 +131,11 @@ export class RuntimeStore {
     const resolvedSnapshot = snapshot ?? this.getSnapshot();
     const resolvedEvents = events ?? this.getRuntimeEvents();
     const lines: string[] = [];
-    lines.push('FlowGuard Diagnostics');
+    lines.push('ClashGuard Diagnostics');
     lines.push('generatedAt=' + new Date().toISOString());
     lines.push('');
     lines.push('[snapshot]');
-    lines.push(JSON.stringify(resolvedSnapshot));
+    lines.push(this.redactSensitiveText(JSON.stringify(resolvedSnapshot)));
     lines.push('');
     lines.push('[settings]');
     lines.push(JSON.stringify(settings));
@@ -158,7 +160,7 @@ export class RuntimeStore {
     lines.push('');
     lines.push('[events]');
     for (const event of resolvedEvents.slice(0, MAX_EVENTS)) {
-      lines.push(this.formatEvent(event));
+      lines.push(this.redactSensitiveText(this.formatEvent(event)));
     }
     return lines.join('\n');
   }
@@ -176,7 +178,7 @@ export class RuntimeStore {
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt,
       lastValidatedAt: profile.lastValidatedAt,
-      lastError: profile.lastError
+      lastError: this.redactSensitiveText(profile.lastError)
     };
     if (profile.subscription) {
       next.subscription = {
@@ -186,7 +188,7 @@ export class RuntimeStore {
         lastSuccessAt: profile.subscription.lastSuccessAt,
         failureCount: profile.subscription.failureCount,
         lastStatusCode: profile.subscription.lastStatusCode,
-        lastError: profile.subscription.lastError,
+        lastError: this.redactSensitiveText(profile.subscription.lastError),
         lastBytes: profile.subscription.lastBytes
       };
     }
@@ -197,22 +199,18 @@ export class RuntimeStore {
     if (!url || url.length === 0) {
       return '';
     }
-    const schemeIndex = url.indexOf('://');
-    if (schemeIndex < 0) {
+    try {
+      const parsed = urlModule.URL.parseURL(url);
+      const port = parsed.port.length > 0 ? ':' + parsed.port : '';
+      return parsed.protocol + '//' + parsed.hostname + port + '/<redacted>';
+    } catch (_) {
       return '<redacted-url>';
     }
-    const hostStart = schemeIndex + 3;
-    let hostEnd = url.indexOf('/', hostStart);
-    if (hostEnd < 0) {
-      hostEnd = url.indexOf('?', hostStart);
-    }
-    if (hostEnd < 0) {
-      hostEnd = url.indexOf('#', hostStart);
-    }
-    if (hostEnd < 0) {
-      return url + '/<redacted>';
-    }
-    return url.substring(0, hostEnd) + '/<redacted>';
+  }
+
+  private redactSensitiveText(text: string): string {
+    return text.replace(/https?:\/\/[^\s'\"<>]+/gi, '<redacted-url>')
+      .replace(/((?:token|password|secret|authorization)\s*[=:]\s*)[^\s,;]+/gi, '$1<redacted>');
   }
 
   resetToIdle(message: string): void {

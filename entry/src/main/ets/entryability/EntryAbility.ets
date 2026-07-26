@@ -10,7 +10,7 @@ import { SubscriptionService } from '../subscription/SubscriptionService';
 
 const DOMAIN = 0x0000;
 const TAG = 'MihomoPocEntry';
-const BUNDLE_NAME = 'com.example.mihomopoc';
+const BUNDLE_NAME = 'com.fly.clashguard';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 const MVP_DEFAULT_CONFIG =
   'mode: direct\n' +
@@ -126,6 +126,10 @@ export default class EntryAbility extends UIAbility {
     const params = want.parameters as Record<string, Object> | undefined;
     const poc = (params?.['poc'] as string | undefined)?.toUpperCase();
     if (poc !== 'POC-04' && poc !== 'POC-05' && poc !== 'POC-06') {
+      return;
+    }
+    if (!this.isDebugBuild()) {
+      hilog.warn(DOMAIN, TAG, 'ignored POC request in release build poc=%{public}s', poc);
       return;
     }
 

@@ -1,4 +1,4 @@
-import { Want } from '@kit.AbilityKit';
+import { bundleManager, Want } from '@kit.AbilityKit';
 import fs from '@ohos.file.fs';
 import { connection, VpnExtensionAbility, vpnExtension } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -11,7 +11,7 @@ import pocNative, { PocStatus } from '../native/PocNative';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoPocVpn';
-const BUNDLE_NAME = 'com.example.mihomopoc';
+const BUNDLE_NAME = 'com.fly.clashguard';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 const TUN_EAGAIN_POLL_MS = 50;
 const GRACEFUL_STOP_TIMEOUT_MS = 3000;
@@ -262,11 +262,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   onCreate(want: Want): void {
     this.vpnContext = this.context;
-    hilog.info(DOMAIN, TAG, 'onCreate want=%{public}s', JSON.stringify(want));
+    hilog.info(DOMAIN, TAG, 'onCreate request=%{public}s', this.requestLabel(want));
   }
 
   onRequest(want: Want, startId: number): void {
-    hilog.info(DOMAIN, TAG, 'onRequest startId=%{public}d want=%{public}s', startId, JSON.stringify(want));
+    hilog.info(DOMAIN, TAG, 'onRequest startId=%{public}d request=%{public}s', startId, this.requestLabel(want));
     if (this.isProductConnectWant(want)) {
       this.startVpnForProduct(want, 'onRequest').catch((err: Object) => {
         hilog.error(DOMAIN, TAG, 'product onRequest async failed: %{public}s', this.toErrorText(err));
@@ -291,6 +291,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       });
       return;
     }
+    if (!this.canRunPocRequest(want)) {
+      hilog.warn(DOMAIN, TAG, 'rejected unsupported VPN request=%{public}s', this.requestLabel(want));
+      return;
+    }
     this.startVpnForPoc(want, 'onRequest').catch((err: Object) => {
       hilog.error(DOMAIN, TAG, 'onRequest async failed: %{public}s', this.toErrorText(err));
     });
@@ -309,7 +313,40 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       await this.runProductProxySelection(want);
       return;
     }
+    if (!this.canRunPocRequest(want)) {
+      hilog.warn(DOMAIN, TAG, 'rejected unsupported VPN connect request=%{public}s', this.requestLabel(want));
+      return;
+    }
     await this.startVpnForPoc(want, 'onConnect');
+  }
+
+  private canRunPocRequest(want: Want): boolean {
+    const params = want.parameters as Record<string, Object> | undefined;
+    const poc = this.getStringParam(params, 'poc', '').toUpperCase();
+    if (poc !== 'POC-03' && poc !== 'POC-04' && poc !== 'POC-05' && poc !== 'POC-06') {
+      return false;
+    }
+    try {
+      const bundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
+      return bundleInfo.appInfo.debug;
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'failed to resolve build mode err=%{public}s', this.toErrorText(err));
+      return false;
+    }
+  }
+
+  private requestLabel(want: Want): string {
+    const params = want.parameters as Record<string, Object> | undefined;
+    const command = this.getStringParam(params, 'command', '');
+    const poc = this.getStringParam(params, 'poc', '');
+    if (command.length > 0) {
+      return 'command=' + command.toLowerCase();
+    }
+    if (poc.length > 0) {
+      return 'poc=' + poc.toUpperCase();
+    }
+    return 'unknown';
   }
 
   private isProductConnectWant(want: Want): boolean {
@@ -808,8 +845,8 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   private async startVpnForPoc(want: Want, source: string): Promise<void> {
     this.connectCount += 1;
-    hilog.info(DOMAIN, TAG, '%{public}s start count=%{public}d want=%{public}s',
-      source, this.connectCount, JSON.stringify(want));
+    hilog.info(DOMAIN, TAG, '%{public}s start count=%{public}d request=%{public}s',
+      source, this.connectCount, this.requestLabel(want));
 
     if (!this.vpnContext) {
       hilog.error(DOMAIN, TAG, '%{public}s failed: vpn context is null', source);
@@ -1020,7 +1057,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       isIPv4Accepted: true,
       isIPv6Accepted: options?.ipv6Enabled ?? false,
       isBlocking: isBlocking,
-      blockedApplications: ['com.example.mihomopoc']
+      blockedApplications: [BUNDLE_NAME]
     };
   }
 

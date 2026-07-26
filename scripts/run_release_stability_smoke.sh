@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/huawei_tools_env.sh"
 
-TMP_DIR="${RELEASE_STABILITY_TMP_DIR:-/private/tmp/flowguard-release-stability}"
+TMP_DIR="${RELEASE_STABILITY_TMP_DIR:-/private/tmp/clashguard-release-stability}"
 APP_STATE_DIR="/data/app/el2/100/base/$POC_BUNDLE_NAME/haps/entry/files/mihomo/state"
 RUNTIME_JSON="$APP_STATE_DIR/runtime.json"
 PROFILES_JSON="$APP_STATE_DIR/profiles.json"
@@ -111,7 +111,7 @@ if ! [[ "$CYCLES" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-echo "== FlowGuard release stability smoke =="
+echo "== ClashGuard release stability smoke =="
 echo "device: $POC_DEVICE_TARGET"
 echo "cycles: $CYCLES"
 
@@ -168,7 +168,7 @@ if [ "$RECOVERY_RETRIES" -ne 0 ]; then
 fi
 
 trap - EXIT
-echo "FlowGuard release stability smoke PASS"
+echo "ClashGuard release stability smoke PASS"
 echo "cycles: $CYCLES"
 echo "final runtime: idle/stopped"
 echo "logs: $TMP_DIR"

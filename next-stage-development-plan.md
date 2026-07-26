@@ -4,7 +4,7 @@
 
 关联资料：
 
-- `design/index.html`：FlowGuard MVP-01 手机端 + 平板端重新设计原型。
+- `design/index.html`：ClashGuard MVP-01 手机端 + 平板端重新设计原型。
 - `mvp-01-development-plan.md`：MVP-01 控制面与真实流量闭环开发计划。
 - `harmonyos-mihomo-product-design.md`：HarmonyOS mihomo 客户端产品设计方案。
 - `entry/src/main/ets/pages/Index.ets`：当前 ArkUI 页面实现。
@@ -12,7 +12,7 @@
 
 ## 1. 阶段目标
 
-下一阶段目标不是继续扩展 POC，而是把已经验证和部分实现的能力收敛成一个可日常试用的 FlowGuard MVP-02：
+下一阶段目标不是继续扩展 POC，而是把已经验证和部分实现的能力收敛成一个可日常试用的 ClashGuard MVP-02：
 
 ```text
 新原型信息架构落地
@@ -73,7 +73,7 @@
 ### 2.2 新原型新增或强化的产品要求
 
 - 品牌与视觉：
-  - 名称切换为 FlowGuard。
+  - 名称切换为 ClashGuard。
   - 深色主界面。
   - 状态球表达 idle / starting / connected / stopping / error / unknown。
   - 状态 pills 展示 VPN、Core、Mode。
@@ -151,7 +151,7 @@
 
 完成情况：
 
-- `Index.ets` 已迁移为 FlowGuard 深色 UI 基线，首屏为运行仪表盘。
+- `Index.ets` 已迁移为 ClashGuard 深色 UI 基线，首屏为运行仪表盘。
 - 已在同一页面内按 `@Builder` 拆分首页、代理、配置、日志、设置、诊断、底部导航、平板侧边栏等结构，保留现有业务调用链。
 - 首页已落地状态球、VPN/Core/Mode pills、错误 banner、当前节点卡片、上下行速率、连接/断开/重载、profile chips、route mode 展示和最近事件。
 - 配置页已改为新结构，手机端保持单栏流程，平板端采用双栏布局。
@@ -170,7 +170,7 @@
 
 范围：
 
-- 将 App 品牌文案统一为 FlowGuard。
+- 将 App 品牌文案统一为 ClashGuard。
 - 重构 `Index.ets` 页面结构：
   - `HomePage`
   - `ProxyPage`

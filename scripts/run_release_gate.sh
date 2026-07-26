@@ -9,7 +9,7 @@ RUN_M2_3="${RELEASE_GATE_M2_3:-false}"
 STABILITY_CYCLES="${RELEASE_GATE_STABILITY_CYCLES:-5}"
 BUILD_RELEASE="${RELEASE_GATE_BUILD_RELEASE:-true}"
 
-echo "== FlowGuard release gate =="
+echo "== ClashGuard release gate =="
 echo "device checks: $RUN_DEVICE"
 
 echo "== shell syntax =="
@@ -31,6 +31,7 @@ echo "== debug HAP =="
 "$HVIGORW" --mode module -p module=entry@default -p product=default -p buildMode=debug assembleHap --no-daemon
 
 if [ "$RUN_DEVICE" = "true" ]; then
+  echo "== debug device regression =="
   echo "== M2-6 config reliability =="
   "$ROOT_DIR/scripts/run_m2_6_config_reliability_smoke.sh"
 
@@ -52,6 +53,11 @@ fi
 if [ "$BUILD_RELEASE" = "true" ]; then
   echo "== release HAP =="
   "$ROOT_DIR/scripts/build_release_hap.sh"
+
+  if [ "$RUN_DEVICE" = "true" ]; then
+    echo "== exact release HAP launch =="
+    "$ROOT_DIR/scripts/run_release_launch_smoke.sh"
+  fi
 fi
 
-echo "FlowGuard release gate PASS"
+echo "ClashGuard release gate PASS"

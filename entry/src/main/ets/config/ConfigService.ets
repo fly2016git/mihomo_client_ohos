@@ -241,7 +241,7 @@ export class ConfigService {
       ok: errors.length === 0,
       unsupportedKeys: unsupported,
       errors,
-      warnings: warnings.concat(['MVP-01A 使用移动端安全 runtime 模板，复杂 YAML 转换将在后续版本完善。'])
+      warnings: warnings.concat(['当前版本使用移动端安全运行模板，部分复杂 YAML 字段可能不受支持。'])
     };
   }
 
@@ -268,7 +268,13 @@ export class ConfigService {
 
   loadProfilesState(): ProfilesState {
     const layout = this.ensureLayout();
+    const backupPath = layout.profilesPath + '.bak';
     if (!this.pathExists(layout.profilesPath)) {
+      const backup = this.readProfilesState(backupPath);
+      if (backup) {
+        this.writeTextFileAtomic(layout.profilesPath, JSON.stringify(backup));
+        return backup;
+      }
       const initial: ProfilesState = {
         activeProfileId: '',
         profiles: []
@@ -277,26 +283,31 @@ export class ConfigService {
       return initial;
     }
 
-    try {
-      const text = fs.readTextSync(layout.profilesPath);
-      const parsed = JSON.parse(text) as ProfilesState;
-      if (!parsed.profiles) {
-        throw new Error('profiles.json has invalid profiles');
-      }
-      return parsed;
-    } catch (_) {
-      const fallback: ProfilesState = {
-        activeProfileId: '',
-        profiles: []
-      };
-      this.saveProfilesState(fallback);
-      return fallback;
+    const current = this.readProfilesState(layout.profilesPath);
+    if (current) {
+      return current;
     }
+
+    const backup = this.readProfilesState(backupPath);
+    this.preserveCorruptProfilesFile(layout.profilesPath);
+    if (backup) {
+      this.writeTextFileAtomic(layout.profilesPath, JSON.stringify(backup));
+      return backup;
+    }
+
+    const fallback: ProfilesState = {
+      activeProfileId: '',
+      profiles: []
+    };
+    this.saveProfilesState(fallback);
+    return fallback;
   }
 
   saveProfilesState(state: ProfilesState): void {
     const layout = this.ensureLayout();
-    this.writeTextFileAtomic(layout.profilesPath, JSON.stringify(state));
+    const content = JSON.stringify(state);
+    this.writeTextFileAtomic(layout.profilesPath, content);
+    this.writeTextFileAtomic(layout.profilesPath + '.bak', content);
   }
 
   getProfile(profileId: string): Profile | null {
@@ -742,6 +753,33 @@ export class ConfigService {
       }
     }
     return null;
+  }
+
+  private readProfilesState(path: string): ProfilesState | null {
+    if (!this.pathExists(path)) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(fs.readTextSync(path)) as ProfilesState;
+      if (!Array.isArray(parsed.profiles) || typeof parsed.activeProfileId !== 'string') {
+        return null;
+      }
+      return parsed;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  private preserveCorruptProfilesFile(path: string): void {
+    if (!this.pathExists(path)) {
+      return;
+    }
+    const corruptPath = path + '.corrupt-' + Date.now().toString();
+    try {
+      fs.renameSync(path, corruptPath);
+    } catch (_) {
+      // Keep the original file in place when it cannot be preserved under a new name.
+    }
   }
 
   private getUnsupportedConfigKeys(yaml: string): string[] {

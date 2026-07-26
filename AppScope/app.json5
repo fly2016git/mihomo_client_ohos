@@ -1,7 +1,7 @@
 {
   "app": {
-    "bundleName": "com.example.mihomopoc",
-    "vendor": "example",
+    "bundleName": "com.fly.clashguard",
+    "vendor": "fly2016",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "icon": "$media:layered_image",

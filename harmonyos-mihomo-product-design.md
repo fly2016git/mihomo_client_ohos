@@ -28,7 +28,7 @@
 - MetaNet
 - ProxyKit
 - Mihomo for Harmony
-- FlowGuard
+- ClashGuard
 
 目标：
 
@@ -876,7 +876,7 @@ OpenHarmony Go runtime 修补记录：
 - C++ NAPI 已改为直接解析并调用 C 层 `PocProtectBridgeSetFn(NapiProtectBridgeImpl)` 注册 protect bridge，不再通过 `PocGoSetProtectBridgeFn(void*)` 为设置 C 静态函数指针而进入 Go runtime。
 - C++ NAPI 已注册 `NapiProtectBridgeImpl`，并把 ArkTS protect callback 的返回值或 Promise 结果同步回 Go worker 线程。
 - `runTcpTest`、`runUdpTest` 已改成 Promise 异步接口，避免同步 NAPI 调用阻塞 ArkTS 线程，导致 TSFN protect callback 无法执行。
-- `VpnExtensionAbility` 已避免在 VPN Extension ArkTS 主线程同步调用 `loadGoCore()`。真机验证显示 `com.example.mihomopoc:vpn` 在主线程同步进入 `PocGoVersion` 时会退出；把首次 Go 调用推迟到 `runTcpTest`/`runUdpTest` 的 NAPI async worker 线程后，进程不再 native crash。
+- `VpnExtensionAbility` 已避免在 VPN Extension ArkTS 主线程同步调用 `loadGoCore()`。真机验证显示 `com.fly.clashguard:vpn` 在主线程同步进入 `PocGoVersion` 时会退出；把首次 Go 调用推迟到 `runTcpTest`/`runUdpTest` 的 NAPI async worker 线程后，进程不再 native crash。
 - `VpnExtensionAbility` 已在 VPN 创建后注册 protect callback、启动 TUN 包计数器，并自动执行：
   - TCP with protect：期望成功，并记录 `loopbackDelta` 与 `totalTunDelta`。
   - TCP with forced protect failure：期望在 outbound 前失败，并记录明确错误。
@@ -913,14 +913,14 @@ DEVICE=192.168.3.65:41235
 
 $HDC -t "$DEVICE" install -r entry/build/default/outputs/default/entry-default-signed.hap
 $HDC -t "$DEVICE" shell hilog -r
-$HDC -t "$DEVICE" shell aa start -b com.example.mihomopoc -a MihomoPocVpnAbility --ps poc POC-03
+$HDC -t "$DEVICE" shell aa start -b com.fly.clashguard -a MihomoPocVpnAbility --ps poc POC-03
 $HDC -t "$DEVICE" shell hilog -x -T MihomoPocVpn,MihomoPocNapi
 ```
 
 5. 可选诊断参数：
 
 ```bash
-$HDC -t "$DEVICE" shell aa start -b com.example.mihomopoc -a MihomoPocVpnAbility \
+$HDC -t "$DEVICE" shell aa start -b com.fly.clashguard -a MihomoPocVpnAbility \
   --ps poc POC-03 \
   --ps udpEchoHost 192.168.3.62 \
   --pi udpEchoPort 53535 \
@@ -1068,7 +1068,7 @@ Mate 80 真机验证记录：
 ```bash
 $HDC -t "$DEVICE" install -r entry/build/default/outputs/default/entry-default-signed.hap
 $HDC -t "$DEVICE" shell hilog -r
-$HDC -t "$DEVICE" shell aa start -b com.example.mihomopoc -a EntryAbility --ps poc POC-04
+$HDC -t "$DEVICE" shell aa start -b com.fly.clashguard -a EntryAbility --ps poc POC-04
 $HDC -t "$DEVICE" shell hilog -x | grep -E 'MihomoPocEntry|MihomoPocVpn|MihomoPocNapi|POC-04'
 ```
 
@@ -1151,7 +1151,7 @@ POC-04 self-test done failures=0
 - 已在 `EntryAbility` 支持通过命令行 Want 参数 `--ps poc POC-05` 触发 VPN Extension：
 
 ```bash
-$HDC -t "$DEVICE" shell aa start -b com.example.mihomopoc -a EntryAbility --ps poc POC-05
+$HDC -t "$DEVICE" shell aa start -b com.fly.clashguard -a EntryAbility --ps poc POC-05
 ```
 
 - C++ NAPI 已补齐 `MihomoOhosStartConfigFile` bridge：
