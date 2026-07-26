@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import { picker } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { scanBarcode } from '@kit.ScanKit';
@@ -34,6 +35,13 @@ import { VpnControlService } from '../runtime/VpnControlService';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoMvpPage';
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
+const IMPORT_READ_CHUNK_BYTES = 64 * 1024;
+
+interface ImportedTextFile {
+  name: string;
+  content: string;
+}
 
 @Entry
 @Component
@@ -67,6 +75,7 @@ struct Index {
   @State latencyBusy: boolean = false;
   @State sheetVisible: boolean = false;
   @State sheetProfileId: string = '';
+  @State settingsSelector: string = '';
   @State createMode: number = 1;
   @State newProfileName: string = '新配置';
   @State editProfileId: string = '';
@@ -89,6 +98,7 @@ struct Index {
   private runtimeRefreshHandler?: () => void;
   private runtimeRefreshBusHandler?: (timestamp: number) => void;
   private logsScroller: Scroller = new Scroller();
+  private followedLogEventKey: string = '';
   private pollTimer: number = -1;
   private profileRefreshTick: number = 0;
   private loadedYamlProfileId: string = '';
@@ -286,15 +296,20 @@ struct Index {
     try {
       const snapshot = this.runtimeStore.getSnapshot();
       this.applySnapshot(snapshot);
-      this.runtimeEvents = this.runtimeStore.getRuntimeEvents();
+      const nextRuntimeEvents = this.runtimeStore.getRuntimeEvents();
+      const latestLogEventKey = nextRuntimeEvents.length > 0 ?
+        nextRuntimeEvents[0].timestamp.toString() + nextRuntimeEvents[0].message : '';
+      const hasNewLogEvent = latestLogEventKey.length > 0 && latestLogEventKey !== this.followedLogEventKey;
+      this.runtimeEvents = nextRuntimeEvents;
       this.profileRefreshTick++;
       if (forceProfiles || this.profileRefreshTick >= 6) {
         this.profileRefreshTick = 0;
         this.reloadProfiles();
       }
-      if (this.selectedSectionIndex === 4 && this.logFollow) {
+      if (this.selectedSectionIndex === 4 && this.logFollow && hasNewLogEvent) {
         this.logsScroller.scrollEdge(Edge.Top);
       }
+      this.followedLogEventKey = latestLogEventKey;
     } catch (err) {
       this.lastError = this.toErrorText(err);
       hilog.error(DOMAIN, TAG, 'refreshState failed: %{public}s', this.lastError);
@@ -477,6 +492,7 @@ struct Index {
   private selectSection(index: number): void {
     if (index === this.selectedSectionIndex) {
       this.sheetVisible = false;
+      this.settingsSelector = '';
       return;
     }
     if (this.isPrimarySection(index)) {
@@ -501,6 +517,7 @@ struct Index {
     }
     this.selectedSectionIndex = index;
     this.sheetVisible = false;
+    this.settingsSelector = '';
     if (index === 0 || index === 1 || index === 2) {
       this.reloadProfiles();
     }
@@ -511,6 +528,10 @@ struct Index {
   }
 
   private navigateBack(): boolean {
+    if (this.settingsSelector.length > 0) {
+      this.settingsSelector = '';
+      return true;
+    }
     if (this.sheetVisible) {
       this.closeProfileActions();
       return true;
@@ -1030,17 +1051,20 @@ struct Index {
         return;
       }
       const uri = uris[0];
-      if (!this.isSupportedImportFile(uri)) {
+      const importedFile = this.readTextFileUri(uri);
+      if (!this.isSupportedImportFile(importedFile.name)) {
         this.subStatus = '导入失败: 仅支持 .yaml/.yml/.txt';
         return;
       }
-      const content = this.readTextFileUri(uri);
+      const content = importedFile.content;
       const validation = await this.configValidationService.validate(content);
       if (!validation.ok) {
         this.subStatus = '导入失败: ' + validation.errors.join('; ');
+        hilog.warn(DOMAIN, TAG, 'Config file validation failed: %{public}s', validation.errors.join('; '));
         return;
       }
-      const name = this.newProfileName.trim().length > 0 ? this.newProfileName.trim() : this.importNameFromUri(uri);
+      const name = this.newProfileName.trim().length > 0 ? this.newProfileName.trim() :
+        this.importNameFromFileName(importedFile.name);
       const profile = this.configService.createLocalProfile(name, content);
       this.configService.setActiveProfile(profile.id);
       this.rawYaml = content;
@@ -1051,6 +1075,7 @@ struct Index {
       this.selectSection(2);
     } catch (err) {
       this.subStatus = '导入异常: ' + this.toErrorText(err);
+      hilog.error(DOMAIN, TAG, 'Config file import failed: %{public}s', this.toErrorText(err));
     } finally {
       this.subBusy = false;
     }
@@ -1105,8 +1130,14 @@ struct Index {
     if (!this.configService) {
       return;
     }
+    if (profileId === this.activeProfileId) {
+      return;
+    }
     const profile = this.configService.setActiveProfile(profileId);
     if (profile) {
+      this.activeProfileId = profile.id;
+      this.activeProfileName = profile.name;
+      this.selectedProxyGroupName = '';
       this.rawYaml = this.configService.loadRawYaml(profileId);
       this.loadedYamlProfileId = profileId;
       this.subStatus = '已切换到: ' + profile.name;
@@ -1126,6 +1157,7 @@ struct Index {
   }
 
   private openProfileActions(profileId: string): void {
+    this.settingsSelector = '';
     this.sheetProfileId = profileId;
     this.sheetVisible = true;
   }
@@ -1296,26 +1328,47 @@ struct Index {
     return '校验通过';
   }
 
-  private isSupportedImportFile(uri: string): boolean {
-    const lower = uri.toLowerCase();
+  private isSupportedImportFile(fileName: string): boolean {
+    const lower = fileName.toLowerCase();
     return lower.endsWith('.yaml') || lower.endsWith('.yml') || lower.endsWith('.txt');
   }
 
-  private importNameFromUri(uri: string): string {
-    const plain = decodeURIComponent(uri);
-    const slash = plain.lastIndexOf('/');
-    const fileName = slash >= 0 ? plain.substring(slash + 1) : plain;
+  private importNameFromFileName(fileName: string): string {
     const dot = fileName.lastIndexOf('.');
     const base = dot > 0 ? fileName.substring(0, dot) : fileName;
     return base.length > 0 ? base : '文件导入配置';
   }
 
-  private readTextFileUri(uri: string): string {
-    const text = fs.readTextSync(uri);
-    if (text.length > 5 * 1024 * 1024) {
-      throw new Error('CONFIG_TOO_LARGE: 文件超过 5 MiB');
+  private readTextFileUri(uri: string): ImportedTextFile {
+    const file = fs.openSync(uri, fs.OpenMode.READ_ONLY);
+    try {
+      const fileSize = fs.statSync(file.fd).size;
+      if (fileSize > MAX_IMPORT_FILE_BYTES) {
+        throw new Error('CONFIG_TOO_LARGE: 文件超过 5 MiB');
+      }
+      const decoder = util.TextDecoder.create('utf-8');
+      let remaining = fileSize;
+      let content = '';
+      while (remaining > 0) {
+        const chunkSize = Math.min(IMPORT_READ_CHUNK_BYTES, remaining);
+        const buffer = new ArrayBuffer(chunkSize);
+        const bytesRead = fs.readSync(file.fd, buffer, { length: chunkSize });
+        if (bytesRead <= 0) {
+          break;
+        }
+        remaining -= bytesRead;
+        content += decoder.decodeToString(new Uint8Array(buffer, 0, bytesRead), { stream: remaining > 0 });
+      }
+      if (remaining > 0) {
+        throw new Error('CONFIG_READ_INCOMPLETE: 文件未完整读取');
+      }
+      return {
+        name: file.name,
+        content: content
+      };
+    } finally {
+      fs.closeSync(file);
     }
-    return text;
   }
 
   private async scanAndCreateSubscription(): Promise<void> {
@@ -1633,6 +1686,19 @@ struct Index {
 
   private toggleLogFollow(): void {
     this.logFollow = !this.logFollow;
+    if (this.logFollow) {
+      this.logsScroller.scrollEdge(Edge.Top);
+    }
+  }
+
+  private pauseLogFollowForUserScroll(source: ScrollSource): void {
+    if (!this.logFollow) {
+      return;
+    }
+    if (source === ScrollSource.DRAG || source === ScrollSource.OTHER_USER_INPUT ||
+      source === ScrollSource.SCROLL_BAR) {
+      this.logFollow = false;
+    }
   }
 
   private exportDiagnostics(): void {
@@ -1835,17 +1901,23 @@ struct Index {
     }
   }
 
-  private cycleRouteMode(): void {
-    const modes: VpnRouteMode[] = ['blocking-default', 'split-default', 'default', 'no-routes', 'exclude-local',
-      'blocking-split', 'blocking-empty'];
-    const index = modes.indexOf(this.appSettings.routeMode);
-    this.updateSettings({ routeMode: modes[(index + 1) % modes.length] });
+  private openSettingsSelector(type: string): void {
+    this.sheetVisible = false;
+    this.settingsSelector = type;
   }
 
-  private cycleProxyMode(): void {
-    const modes: ProxyMode[] = ['rule', 'global', 'direct'];
-    const index = modes.indexOf(this.appSettings.proxyMode);
-    this.updateSettings({ proxyMode: modes[(index + 1) % modes.length] });
+  private closeSettingsSelector(): void {
+    this.settingsSelector = '';
+  }
+
+  private selectRouteMode(mode: VpnRouteMode): void {
+    this.updateSettings({ routeMode: mode });
+    this.closeSettingsSelector();
+  }
+
+  private selectProxyMode(mode: ProxyMode): void {
+    this.updateSettings({ proxyMode: mode });
+    this.closeSettingsSelector();
   }
 
   private cycleDnsMode(): void {
@@ -1862,7 +1934,7 @@ struct Index {
 
   private routeModeLabel(mode: string): string {
     if (mode === 'blocking-default') {
-      return '全量接管';
+      return '全量接管(推荐)';
     }
     if (mode === 'split-default') {
       return '分段默认路由';
@@ -1892,7 +1964,7 @@ struct Index {
     if (mode === 'direct') {
       return '直连';
     }
-    return '规则';
+    return '规则(推荐)';
   }
 
   private dnsModeLabel(mode: string): string {
@@ -2331,18 +2403,18 @@ struct Index {
                 Text(this.profileNameLabel(p))
                   .fontSize(13)
                   .fontWeight(FontWeight.Medium)
-                  .fontColor(p.active ? this.accentColor() : this.secondaryText())
+                  .fontColor(p.id === this.activeProfileId ? this.accentColor() : this.secondaryText())
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                 Text((p.type === 'subscription' ? '订阅' : '本地') + ' · ' + this.profileRuleText(p) +
-                  ' · ' + (p.active ? '当前' : this.profileRelativeText(p)))
+                  ' · ' + (p.id === this.activeProfileId ? '当前' : this.profileRelativeText(p)))
                   .fontSize(10)
-                  .fontColor(p.active ? '#78E2D5' : this.mutedText())
+                  .fontColor(p.id === this.activeProfileId ? '#78E2D5' : this.mutedText())
                   .maxLines(1)
               }
               .height(48)
               .padding({ left: 12, right: 12, top: 7, bottom: 6 })
-              .backgroundColor(p.active ? '#17302F' : this.elevatedBg())
+              .backgroundColor(p.id === this.activeProfileId ? '#17302F' : this.elevatedBg())
               .borderRadius(10)
               .onClick(() => {
                 this.switchProfile(p.id);
@@ -2360,7 +2432,7 @@ struct Index {
 
   @Builder RouteModeSection() {
     Column({ space: 8 }) {
-      this.SectionTitle('路由模式', '点击切换')
+      this.SectionTitle('路由模式', '选择')
       Row() {
         Text(this.routeModeLabel(this.appSettings.routeMode))
           .fontSize(13)
@@ -2375,7 +2447,7 @@ struct Index {
       .backgroundColor(this.inputBg())
       .borderRadius(10)
       .onClick(() => {
-        this.cycleRouteMode();
+        this.openSettingsSelector('route');
       })
     }
     .width('100%')
@@ -2766,9 +2838,9 @@ struct Index {
 
   @Builder ProfileRow(p: Profile) {
     Row({ space: 12 }) {
-      Text(p.active ? '●' : '○')
+      Text(p.id === this.activeProfileId ? '●' : '○')
         .fontSize(18)
-        .fontColor(p.active ? this.accentColor() : this.mutedText())
+        .fontColor(p.id === this.activeProfileId ? this.accentColor() : this.mutedText())
         .width(28)
         .textAlign(TextAlign.Center)
         .onClick(() => {
@@ -2794,6 +2866,9 @@ struct Index {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
+      .onClick(() => {
+        this.switchProfile(p.id);
+      })
 
       Button('...')
         .width(42)
@@ -2809,7 +2884,7 @@ struct Index {
     .width('100%')
     .height(92)
     .padding({ left: 12, right: 12 })
-    .backgroundColor(p.active ? '#17302F' : this.surfaceBg())
+    .backgroundColor(p.id === this.activeProfileId ? '#17302F' : this.surfaceBg())
     .borderRadius(12)
   }
 
@@ -3172,6 +3247,9 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)
+    .onWillScroll((_xOffset: number, _yOffset: number, _scrollState: ScrollState, source: ScrollSource) => {
+      this.pauseLogFollowForUserScroll(source);
+    })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
@@ -3286,7 +3364,7 @@ struct Index {
     .backgroundColor(this.surfaceBg())
     .borderRadius(12)
     .onClick(() => {
-      this.cycleProxyMode();
+      this.openSettingsSelector('proxy');
     })
   }
 
@@ -3307,7 +3385,7 @@ struct Index {
     .backgroundColor(this.surfaceBg())
     .borderRadius(12)
     .onClick(() => {
-      this.cycleRouteMode();
+      this.openSettingsSelector('route');
     })
   }
 
@@ -3502,6 +3580,10 @@ struct Index {
   @Builder HelpPage() {
     Column({ space: 12 }) {
       this.DiagCard('帮助', '配置页用于管理 Clash/mihomo YAML 或 URL 订阅。', '连接后首页会展示状态、节点和运行事件。')
+      this.DiagCard('VPN 路由', '全量接管(推荐)：接管全部 IPv4 流量。',
+        '分段默认路由适用于兼容性场景；其他路由模式主要用于诊断。“阻塞”指 TUN 读写方式。')
+      this.DiagCard('启动模式', '规则(推荐)：按配置规则选择代理或直连。',
+        '全局：统一使用全局代理节点。直连：不通过代理节点。')
     }
     .width('100%')
     .layoutWeight(1)
@@ -3539,6 +3621,151 @@ struct Index {
     .justifyContent(FlexAlign.Center)
     .backgroundColor(this.surfaceBg())
     .borderRadius(12)
+  }
+
+  @Builder SettingsSelectionSheet() {
+    Column() {
+      Blank()
+        .layoutWeight(1)
+        .onClick(() => {
+          this.closeSettingsSelector();
+        })
+
+      Column({ space: 12 }) {
+        Row()
+          .width(54)
+          .height(5)
+          .backgroundColor(this.mutedText())
+          .borderRadius(3)
+
+        Row({ space: 12 }) {
+          Column({ space: 3 }) {
+            Text(this.settingsSelector === 'route' ? 'VPN 路由' : '启动模式')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.primaryText())
+            Text(this.settingsSelector === 'route' ? '选择系统流量进入 VPN 的路由方式' : '选择 mihomo 处理已接管流量的方式')
+              .fontSize(11)
+              .fontColor(this.secondaryText())
+              .maxLines(1)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+
+          Row() {
+            SymbolGlyph($r('sys.symbol.xmark'))
+              .fontSize(18)
+              .fontColor([this.secondaryText()])
+          }
+          .width(36)
+          .height(36)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+          .backgroundColor(this.elevatedBg())
+          .borderRadius(10)
+          .onClick(() => {
+            this.closeSettingsSelector();
+          })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+
+        if (this.settingsSelector === 'route') {
+          Column({ space: 4 }) {
+            this.SettingsModeOption('全量接管(推荐)', '接管全部 IPv4 流量，适合日常使用',
+              this.appSettings.routeMode === 'blocking-default', () => {
+                this.selectRouteMode('blocking-default');
+              })
+            this.SettingsModeOption('分段默认路由', '分段接管全部 IPv4 流量，用于兼容性场景',
+              this.appSettings.routeMode === 'split-default', () => {
+                this.selectRouteMode('split-default');
+              })
+            this.SettingsModeOption('系统默认路由', '使用一条默认路由接管全部 IPv4 流量',
+              this.appSettings.routeMode === 'default', () => {
+                this.selectRouteMode('default');
+              })
+            this.SettingsModeOption('不下发路由', '不接管普通流量，仅用于诊断', this.appSettings.routeMode === 'no-routes', () => {
+              this.selectRouteMode('no-routes');
+            })
+            this.SettingsModeOption('排除局域网', '当前仅路由 VPN 自身网段，实验模式', this.appSettings.routeMode === 'exclude-local', () => {
+              this.selectRouteMode('exclude-local');
+            })
+            this.SettingsModeOption('阻塞分段路由', '分段接管全部 IPv4，TUN 使用阻塞读写',
+              this.appSettings.routeMode === 'blocking-split', () => {
+                this.selectRouteMode('blocking-split');
+              })
+            this.SettingsModeOption('阻塞空路由', '不下发路由，TUN 使用阻塞读写，仅用于诊断',
+              this.appSettings.routeMode === 'blocking-empty', () => {
+                this.selectRouteMode('blocking-empty');
+              })
+          }
+          .width('100%')
+
+          Text('“阻塞”指 TUN 文件描述符的读写方式，不代表阻止网络访问。')
+            .fontSize(11)
+            .fontColor(this.mutedText())
+            .width('100%')
+            .maxLines(2)
+        } else {
+          Column({ space: 4 }) {
+            this.SettingsModeOption('规则(推荐)', '按配置规则决定代理或直连，适合日常使用',
+              this.appSettings.proxyMode === 'rule', () => {
+                this.selectProxyMode('rule');
+              })
+            this.SettingsModeOption('全局', '所有已接管流量统一通过全局代理节点', this.appSettings.proxyMode === 'global', () => {
+              this.selectProxyMode('global');
+            })
+            this.SettingsModeOption('直连', '流量由 mihomo 直接连接，不经过代理节点', this.appSettings.proxyMode === 'direct', () => {
+              this.selectProxyMode('direct');
+            })
+          }
+          .width('100%')
+        }
+      }
+      .width('100%')
+      .height(this.settingsSelector === 'route' ? 620 : 330)
+      .padding({ left: 20, right: 20, top: 18, bottom: 30 })
+      .backgroundColor(this.surfaceBg())
+      .borderRadius({ topLeft: 22, topRight: 22 })
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#99000000')
+  }
+
+  @Builder SettingsModeOption(title: string, description: string, selected: boolean, action: () => void) {
+    Row({ space: 12 }) {
+      Column({ space: 3 }) {
+        Text(title)
+          .fontSize(14)
+          .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor(selected ? this.accentColor() : this.primaryText())
+          .width('100%')
+          .maxLines(1)
+        Text(description)
+          .fontSize(11)
+          .fontColor(this.secondaryText())
+          .width('100%')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+
+      SymbolGlyph($r('sys.symbol.checkmark'))
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor([selected ? this.accentColor() : '#00000000'])
+        .width(24)
+    }
+    .width('100%')
+    .height(60)
+    .padding({ left: 12, right: 12 })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(selected ? '#17302F' : '#00000000')
+    .borderRadius(10)
+    .onClick(action)
   }
 
   @Builder ProfileActionSheet() {
@@ -3741,7 +3968,12 @@ struct Index {
         this.ProfileActionSheet()
       }
 
-      if (!this.isTabletLayout() && (this.selectedSectionIndex !== 0 || this.sheetVisible)) {
+      if (this.settingsSelector.length > 0) {
+        this.SettingsSelectionSheet()
+      }
+
+      if (!this.isTabletLayout() &&
+        (this.selectedSectionIndex !== 0 || this.sheetVisible || this.settingsSelector.length > 0)) {
         this.EdgeBackGestureArea()
       }
     }
