@@ -21,6 +21,7 @@ Without signing, `scripts/build_release_hap.sh` still builds and verifies the un
 ## Required Checks
 
 - Review `PRIVACY.md`, `THIRD_PARTY_NOTICES.md`, and dependency licenses.
+- Confirm the bundled `geoip.metadb` source, license notice, and SHA-256 before updating it.
 - Run `scripts/run_release_gate.sh`.
 - Run the gate against a physical device with the exact signed release HAP.
 - Confirm VPN consent, connection, disconnection, subscription update, configuration import, and foreground/background restoration manually.

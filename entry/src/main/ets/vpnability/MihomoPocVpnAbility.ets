@@ -3,6 +3,7 @@ import fs from '@ohos.file.fs';
 import { connection, VpnExtensionAbility, vpnExtension } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { ConfigService } from '../config/ConfigService';
+import { BundledGeoIpService } from '../geo/BundledGeoIpService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { TrafficStatsService } from '../runtime/TrafficStatsService';
 import { Profile, ProxyLatencyRecord, ProxyLatencyState } from '../models/MvpTypes';
@@ -425,6 +426,14 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       }
       if (this.vpnConnection && this.tunFd >= 0) {
         await this.destroyVpn();
+      }
+
+      try {
+        const geoIp = BundledGeoIpService.ensureInstalled(this.context.filesDir, this.context.resourceManager);
+        store.appendEvent('GeoIP database ' + (geoIp.copied ? 'restored from bundle' : 'cache ready') +
+          ' bytes=' + geoIp.bytes.toString(), 'info', 'core');
+      } catch (err) {
+        store.appendEvent('GeoIP database initialization failed: ' + this.toErrorText(err), 'warn', 'core');
       }
 
       this.ensureProductRuntimeReady(configService, profile);

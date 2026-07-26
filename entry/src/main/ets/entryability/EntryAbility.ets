@@ -4,6 +4,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { ConfigService } from '../config/ConfigService';
 import { ConfigValidationService } from '../config/ConfigValidationService';
+import { BundledGeoIpService } from '../geo/BundledGeoIpService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { UiRefreshBus } from '../runtime/UiRefreshBus';
 import { SubscriptionService } from '../subscription/SubscriptionService';
@@ -54,6 +55,7 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
+    this.ensureBundledGeoIp();
     hilog.info(DOMAIN, TAG, 'Ability onCreate want=%{public}s', this.wantToLogText(want));
     this.notifyUiRuntimeRefresh('onCreate');
     this.tryHandleMvpCommand(want, 'onCreate');
@@ -94,6 +96,16 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onBackground');
+  }
+
+  private ensureBundledGeoIp(): void {
+    try {
+      const result = BundledGeoIpService.ensureInstalled(this.context.filesDir, this.context.resourceManager);
+      hilog.info(DOMAIN, TAG, 'GeoIP database %{public}s path=%{public}s bytes=%{public}d',
+        result.copied ? 'restored from bundle' : 'cache ready', result.path, result.bytes);
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'GeoIP database initialization failed: %{public}s', this.toErrorText(err));
+    }
   }
 
   private notifyUiRuntimeRefresh(source: string): void {

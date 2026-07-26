@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HAP_PATH="${1:-$ROOT_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap}"
+GEOIP_ENTRY='resources/rawfile/geoip.metadb'
+EXPECTED_GEOIP_SHA256='79a59a337d942c9dd8874ae64028024f9f4461452a4db4eee9697f9faeab1340'
 
 if [ ! -f "$HAP_PATH" ]; then
   echo "release HAP not found: $HAP_PATH" >&2
@@ -37,6 +39,12 @@ fi
 
 if unzip -p "$HAP_PATH" ets/modules.abc | strings | grep -E '客户端原型|Mihomo POC VPN' >/dev/null; then
   echo 'release HAP contains prototype product text' >&2
+  exit 1
+fi
+
+geoip_sha256="$(unzip -p "$HAP_PATH" "$GEOIP_ENTRY" | shasum -a 256 | awk '{print $1}')"
+if [ "$geoip_sha256" != "$EXPECTED_GEOIP_SHA256" ]; then
+  echo 'release HAP has a missing or unexpected geoip.metadb' >&2
   exit 1
 fi
 
