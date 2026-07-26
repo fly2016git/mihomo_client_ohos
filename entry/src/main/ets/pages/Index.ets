@@ -28,6 +28,7 @@ import {
 } from '../models/MvpTypes';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { TrafficStatsService } from '../runtime/TrafficStatsService';
+import { AgreementService, CURRENT_AGREEMENT_VERSION } from '../settings/AgreementService';
 import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { UiRefreshBus } from '../runtime/UiRefreshBus';
@@ -87,6 +88,9 @@ struct Index {
   @State diagnosticText: string = '';
   @State lastDiagnosticPath: string = '';
   @State renderTick: number = 0;
+  @State agreementReady: boolean = false;
+  @State agreementAccepted: boolean = false;
+  @State agreementError: string = '';
 
   private configService?: ConfigService;
   private configValidationService?: ConfigValidationService;
@@ -94,6 +98,7 @@ struct Index {
   private vpnControlService?: VpnControlService;
   private subscriptionService?: SubscriptionService;
   private settingsService?: SettingsService;
+  private agreementService?: AgreementService;
   private uiContext?: common.UIAbilityContext;
   private runtimeRefreshHandler?: () => void;
   private runtimeRefreshBusHandler?: (timestamp: number) => void;
@@ -114,6 +119,9 @@ struct Index {
     this.vpnControlService = new VpnControlService(filesDir, context);
     this.subscriptionService = new SubscriptionService(filesDir);
     this.settingsService = new SettingsService(filesDir);
+    this.agreementService = new AgreementService(filesDir);
+    this.agreementAccepted = this.agreementService.hasAcceptedCurrent();
+    this.agreementReady = true;
     this.bindRuntimeRefreshEvent(context);
     this.bindRuntimeRefreshBus();
     const profile = this.configService.getActiveProfile();
@@ -151,7 +159,33 @@ struct Index {
   }
 
   onBackPress(): boolean {
+    if (this.agreementReady && !this.agreementAccepted) {
+      return true;
+    }
     return this.navigateBack();
+  }
+
+  private acceptAgreement(): void {
+    if (!this.agreementService) {
+      this.agreementError = '无法保存协议状态，请重新启动应用后重试';
+      return;
+    }
+    try {
+      this.agreementService.acceptCurrent();
+      this.agreementAccepted = true;
+      this.agreementError = '';
+    } catch (err) {
+      this.agreementError = '保存失败：' + this.toErrorText(err);
+    }
+  }
+
+  private declineAgreement(): void {
+    if (!this.uiContext) {
+      return;
+    }
+    this.uiContext.terminateSelf().catch((err: Object) => {
+      this.agreementError = '退出失败：' + this.toErrorText(err);
+    });
   }
 
   onRuntimeRefreshSignalChanged(): void {
@@ -469,6 +503,9 @@ struct Index {
     }
     if (this.selectedSectionIndex === 9) {
       return '诊断';
+    }
+    if (this.selectedSectionIndex === 10) {
+      return '用户协议';
     }
     return '首页';
   }
@@ -2604,6 +2641,8 @@ struct Index {
       this.EditConfigPage()
     } else if (this.selectedSectionIndex === 9) {
       this.DiagnosticsPage()
+    } else if (this.selectedSectionIndex === 10) {
+      this.AgreementPage()
     }
   }
 
@@ -3675,6 +3714,9 @@ struct Index {
         this.DiagCard('ClashGuard', '版本 1.0.0', '基于 mihomo 的 HarmonyOS VPN 客户端')
         this.DiagCard('隐私政策', '应用不收集账号、设备标识或使用统计。',
           '订阅地址仅用于用户主动更新；诊断文件仅在用户主动操作时生成。')
+        this.SettingsActionRow('用户协议与免责声明', '版本 ' + CURRENT_AGREEMENT_VERSION, '查看', () => {
+          this.selectSection(10);
+        })
         this.DiagCard('开源许可', 'ClashGuard：GNU AGPL v3', 'mihomo 核心：GNU GPL v3')
         this.DiagCard('版权与担保', '© 2026 ClashGuard contributors', '本软件按“原样”提供，不附带任何担保。')
         this.DiagCard('源代码', 'github.com/fly2016git/mihomo_client_ohos',
@@ -3689,6 +3731,139 @@ struct Index {
     .width('100%')
     .layoutWeight(1)
     .backgroundColor(this.appBg())
+  }
+
+  @Builder AgreementSection(title: string, content: string) {
+    Column({ space: 6 }) {
+      Text(title)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.primaryText())
+        .width('100%')
+      Text(content)
+        .fontSize(12)
+        .lineHeight(19)
+        .fontColor(this.secondaryText())
+        .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder AgreementContent() {
+    Column({ space: 16 }) {
+      this.AgreementSection('服务说明',
+        'ClashGuard 是在设备本地运行的开源 VPN 客户端，仅提供配置管理、VPN 连接和网络路由能力，不提供代理节点、订阅内容或网络接入服务。')
+      this.AgreementSection('用户责任',
+        '你应确保导入的配置、订阅地址和代理服务来源可信，并遵守所在地适用的法律法规及第三方服务条款。请妥善保管配置中可能包含的服务器地址、令牌和密码。')
+      this.AgreementSection('第三方服务',
+        'ClashGuard 不运营、不控制也不为第三方订阅、代理节点、DNS 服务或网络内容提供担保。第三方服务的可用性、安全性、收费方式和数据处理规则由其提供方负责。')
+      this.AgreementSection('网络与配置风险',
+        '网络流量会按照你选择的配置和路由模式处理。错误、恶意或不兼容的配置可能造成断网、DNS 异常、流量泄露、额外费用或数据安全风险。发现异常时请及时断开 VPN。')
+      this.AgreementSection('免责声明与责任限制',
+        '本软件按“原样”提供。在适用法律允许的最大范围内，开发者不对第三方服务中断、配置错误、网络环境变化或用户不当使用造成的间接损失承担责任。本条款不排除或限制因开发者故意、重大过失、安全缺陷，或法律强制规定而依法应承担的责任。')
+      this.AgreementSection('隐私与开源许可',
+        '应用的数据处理方式见隐私政策。ClashGuard 按 GNU AGPL v3 发布，内置 mihomo 核心按 GNU GPL v3 发布。协议发生重要变化时，应用会再次请求确认。')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder AgreementPage() {
+    Scroll() {
+      Column({ space: 16 }) {
+        Text('用户协议与免责声明')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .width('100%')
+        Text('版本 ' + CURRENT_AGREEMENT_VERSION)
+          .fontSize(12)
+          .fontColor(this.mutedText())
+          .width('100%')
+        this.AgreementContent()
+      }
+      .width('100%')
+      .constraintSize({ minHeight: '100%' })
+      .padding({ left: 20, right: 20, bottom: 28 })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .scrollable(ScrollDirection.Vertical)
+    .scrollBar(BarState.Auto)
+    .layoutWeight(1)
+    .width('100%')
+    .backgroundColor(this.appBg())
+  }
+
+  @Builder AgreementConsentOverlay() {
+    Column({ space: 14 }) {
+      Column({ space: 5 }) {
+        Text('用户协议与免责声明')
+          .fontSize(21)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .width('100%')
+        Text('请阅读后选择是否继续使用 ClashGuard')
+          .fontSize(12)
+          .fontColor(this.secondaryText())
+          .width('100%')
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+
+      Scroll() {
+        Column({ space: 14 }) {
+          this.AgreementContent()
+          Text('协议版本：' + CURRENT_AGREEMENT_VERSION)
+            .fontSize(11)
+            .fontColor(this.mutedText())
+            .width('100%')
+        }
+        .width('100%')
+        .padding({ top: 6, bottom: 8 })
+      }
+      .scrollable(ScrollDirection.Vertical)
+      .scrollBar(BarState.Auto)
+      .layoutWeight(1)
+      .width('100%')
+
+      if (this.agreementError.length > 0) {
+        Text(this.agreementError)
+          .fontSize(11)
+          .fontColor(this.dangerColor())
+          .width('100%')
+      }
+
+      Row({ space: 10 }) {
+        Button('不同意并退出')
+          .height(44)
+          .layoutWeight(1)
+          .fontSize(13)
+          .fontColor(this.secondaryText())
+          .backgroundColor(this.elevatedBg())
+          .borderRadius(10)
+          .onClick(() => {
+            this.declineAgreement();
+          })
+        Button('同意并继续')
+          .height(44)
+          .layoutWeight(1)
+          .fontSize(13)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#042F2E')
+          .backgroundColor(this.accentColor())
+          .borderRadius(10)
+          .onClick(() => {
+            this.acceptAgreement();
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 20, right: 20, top: 24, bottom: 20 })
+    .backgroundColor(this.appBg())
+    .zIndex(1000)
   }
 
   @Builder EmptyCard(title: string, subtitle: string) {
@@ -4062,6 +4237,10 @@ struct Index {
       if (!this.isTabletLayout() &&
         (this.selectedSectionIndex !== 0 || this.sheetVisible || this.settingsSelector.length > 0)) {
         this.EdgeBackGestureArea()
+      }
+
+      if (this.agreementReady && !this.agreementAccepted) {
+        this.AgreementConsentOverlay()
       }
     }
     .height('100%')

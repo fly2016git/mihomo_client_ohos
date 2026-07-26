@@ -263,11 +263,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   onCreate(want: Want): void {
     this.vpnContext = this.context;
-    hilog.info(DOMAIN, TAG, 'onCreate request=%{public}s', this.requestLabel(want));
+    hilog.debug(DOMAIN, TAG, 'onCreate request=%{public}s', this.requestLabel(want));
   }
 
   onRequest(want: Want, startId: number): void {
-    hilog.info(DOMAIN, TAG, 'onRequest startId=%{public}d request=%{public}s', startId, this.requestLabel(want));
+    hilog.debug(DOMAIN, TAG, 'onRequest startId=%{public}d request=%{public}s', startId, this.requestLabel(want));
     if (this.isProductConnectWant(want)) {
       this.startVpnForProduct(want, 'onRequest').catch((err: Object) => {
         hilog.error(DOMAIN, TAG, 'product onRequest async failed: %{public}s', this.toErrorText(err));
@@ -390,10 +390,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       return;
     }
 
-    hilog.info(DOMAIN, TAG,
-      'product %{public}s connect profile=%{public}s routeMode=%{public}s dns=%{public}s readProbeMs=%{public}d',
+    hilog.debug(DOMAIN, TAG,
+      'product %{public}s connect profile=%{private}s routeMode=%{public}s dns=%{private}s readProbeMs=%{public}d',
       source, profile.id, vpnOptions.routeMode, vpnOptions.dnsAddress, vpnOptions.tunReadinessProbeMs);
-    hilog.info(DOMAIN, TAG, 'product route options interface=%{public}s defaultFlag=%{public}s',
+    hilog.debug(DOMAIN, TAG, 'product route options interface=%{private}s defaultFlag=%{public}s',
       vpnOptions.routeInterface.length > 0 ? vpnOptions.routeInterface : '<empty>',
       vpnOptions.routeDefaultFlag ? 'true' : 'false');
     if (this.startInProgress) {
@@ -439,9 +439,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.ensureProductRuntimeReady(configService, profile);
       this.vpnConnection = vpnExtension.createVpnConnection(this.vpnContext);
       const vpnConfig = this.createPocConfig(vpnOptions);
-      hilog.info(DOMAIN, TAG, 'product creating vpn config=%{public}s', JSON.stringify(vpnConfig));
+      hilog.debug(DOMAIN, TAG, 'product creating vpn config routes=%{public}d dns=%{public}d',
+        vpnConfig.routes?.length ?? 0, vpnConfig.dnsAddresses?.length ?? 0);
       this.tunFd = await this.vpnConnection.create(vpnConfig);
-      hilog.info(DOMAIN, TAG, 'product tunFd created fd=%{public}d', this.tunFd);
+      hilog.debug(DOMAIN, TAG, 'product tunFd created fd=%{public}d', this.tunFd);
       store.update({
         tunFd: this.tunFd,
         lastEvent: 'VPN created'
@@ -473,7 +474,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         throw new Error('CORE_START_FAILED: ' + startStatus.message);
       }
       store.appendEvent('Core start status: ' + startStatus.message);
-      hilog.info(DOMAIN, TAG, 'MVP-01B core start status: %{public}s', startStatus.message);
+      hilog.debug(DOMAIN, TAG, 'MVP-01B core start status: %{public}s', startStatus.message);
 
       await this.applySavedProxySelections(configService, profile, store);
 
@@ -481,7 +482,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       // same Go runtime entry as mihomo startup. Do not call enableProtectHook()
       // again from the JS thread; on device this second cgo entry can crash.
       store.appendEvent('Protect hook auto-enabled by Go bridge');
-      hilog.info(DOMAIN, TAG, 'MVP-01B protect hook auto-enabled by startWithConfig');
+      hilog.debug(DOMAIN, TAG, 'MVP-01B protect hook auto-enabled by startWithConfig');
 
       if (vpnOptions.tunReadinessProbeMs > 0) {
         const pollProbeStatus = pocNative.startTunFdPollProbe(this.tunFd, vpnOptions.tunReadinessProbeMs);
@@ -624,7 +625,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       return record.profileId !== profileId || groupNames.indexOf(record.groupName) < 0;
     });
 
-    hilog.info(DOMAIN, TAG, 'product latency request id=%{public}s profile=%{public}s groups=%{public}d',
+    hilog.debug(DOMAIN, TAG, 'product latency request id=%{private}s profile=%{private}s groups=%{public}d',
       requestId, profileId, groupNames.length);
 
     if (groupNames.length === 0) {
@@ -783,7 +784,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   private async stopVpnForProduct(source: string): Promise<void> {
     const store = new RuntimeStore(this.context.filesDir);
-    hilog.info(DOMAIN, TAG, 'product %{public}s disconnect fd=%{public}d', source, this.tunFd);
+    hilog.debug(DOMAIN, TAG, 'product %{public}s disconnect fd=%{public}d', source, this.tunFd);
     store.update({
       runtimeState: 'stopping',
       coreState: 'stopping',
@@ -804,7 +805,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         try {
           const gracefulStatus: PocStatus = await this.gracefulStopWithTimeout(GRACEFUL_STOP_TIMEOUT_MS);
           store.appendEvent('Mihomo graceful stop: ' + (gracefulStatus.ok ? 'ok' : 'failed code=' + gracefulStatus.code));
-          hilog.info(DOMAIN, TAG, 'MVP-01B gracefulStopMihomo ok=%{public}s code=%{public}d',
+          hilog.debug(DOMAIN, TAG, 'MVP-01B gracefulStopMihomo ok=%{public}s code=%{public}d',
             gracefulStatus.ok ? 'true' : 'false', gracefulStatus.code);
         } catch (err) {
           hilog.warn(DOMAIN, TAG, 'MVP-01B gracefulStopMihomo threw: %{public}s', this.toErrorText(err));
@@ -829,13 +830,13 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         lastEvent: 'Disconnected'
       });
       store.appendEvent('Disconnected');
-      hilog.info(DOMAIN, TAG, 'product disconnect complete');
+      hilog.debug(DOMAIN, TAG, 'product disconnect complete');
       try {
         await vpnExtension.stopVpnExtensionAbility({
           bundleName: BUNDLE_NAME,
           abilityName: VPN_ABILITY_NAME
         });
-        hilog.info(DOMAIN, TAG, 'VPN extension stop requested after disconnect');
+        hilog.debug(DOMAIN, TAG, 'VPN extension stop requested after disconnect');
       } catch (stopErr) {
         hilog.warn(DOMAIN, TAG, 'VPN extension stop request failed: %{public}s', this.toErrorText(stopErr));
       }
@@ -854,7 +855,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   private async startVpnForPoc(want: Want, source: string): Promise<void> {
     this.connectCount += 1;
-    hilog.info(DOMAIN, TAG, '%{public}s start count=%{public}d request=%{public}s',
+    hilog.debug(DOMAIN, TAG, '%{public}s start count=%{public}d request=%{public}s',
       source, this.connectCount, this.requestLabel(want));
 
     if (!this.vpnContext) {
@@ -883,7 +884,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       }
 
       this.poc03Options = this.parsePoc03Options(want);
-      hilog.info(DOMAIN, TAG,
+      hilog.debug(DOMAIN, TAG,
         'POC options poc=%{public}s udpEcho=%{public}s:%{public}d rawUdpPreflight=%{public}s tunPacketDump=%{public}s',
         pocName,
         this.poc03Options.udpEchoHost, this.poc03Options.udpEchoPort,
@@ -896,34 +897,35 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
       this.vpnConnection = vpnExtension.createVpnConnection(this.vpnContext);
       const config = this.createPocConfig();
-      hilog.info(DOMAIN, TAG, 'creating vpn config=%{public}s', JSON.stringify(config));
+      hilog.debug(DOMAIN, TAG, 'creating vpn config routes=%{public}d dns=%{public}d',
+        config.routes?.length ?? 0, config.dnsAddresses?.length ?? 0);
 
       this.tunFd = await this.vpnConnection.create(config);
-      hilog.info(DOMAIN, TAG, 'tunFd created fd=%{public}d', this.tunFd);
+      hilog.debug(DOMAIN, TAG, 'tunFd created fd=%{public}d', this.tunFd);
 
       await this.probeTunFd(this.tunFd);
 
-      hilog.info(DOMAIN, TAG, 'POC-03 about to init after tun probe fd=%{public}d', this.tunFd);
+      hilog.debug(DOMAIN, TAG, 'POC-03 about to init after tun probe fd=%{public}d', this.tunFd);
       if (pocName === 'POC-04') {
         await this.initPoc04();
-        hilog.info(DOMAIN, TAG, 'POC-04 init returned fd=%{public}d', this.tunFd);
+        hilog.debug(DOMAIN, TAG, 'POC-04 init returned fd=%{public}d', this.tunFd);
       } else if (pocName === 'POC-05') {
         await this.initPoc05();
-        hilog.info(DOMAIN, TAG, 'POC-05 init returned fd=%{public}d', this.tunFd);
+        hilog.debug(DOMAIN, TAG, 'POC-05 init returned fd=%{public}d', this.tunFd);
       } else if (pocName === 'POC-06') {
         await this.initPoc06();
-        hilog.info(DOMAIN, TAG, 'POC-06 init returned fd=%{public}d', this.tunFd);
+        hilog.debug(DOMAIN, TAG, 'POC-06 init returned fd=%{public}d', this.tunFd);
       } else {
-        hilog.info(DOMAIN, TAG, 'POC-03 skip synchronous loadGoCore preflight in VPN process');
+        hilog.debug(DOMAIN, TAG, 'POC-03 skip synchronous loadGoCore preflight in VPN process');
         // POC-03: Ensure Go core loaded, register protect callback, start TUN reader
         await this.initPoc03();
-        hilog.info(DOMAIN, TAG, 'POC-03 init returned fd=%{public}d', this.tunFd);
+        hilog.debug(DOMAIN, TAG, 'POC-03 init returned fd=%{public}d', this.tunFd);
       }
 
       if (pocName !== 'POC-06') {
         this.setPoc06State('connected', source + ' complete poc=' + pocName);
       }
-      hilog.info(DOMAIN, TAG, '%{public}s complete fd=%{public}d', source, this.tunFd);
+      hilog.debug(DOMAIN, TAG, '%{public}s complete fd=%{public}d', source, this.tunFd);
     } catch (err) {
       this.setPoc06State('error', source + ' failed poc=' + pocName + ' err=' + this.toErrorText(err));
       hilog.error(DOMAIN, TAG, '%{public}s failed: %{public}s', source, this.toErrorText(err));
@@ -934,7 +936,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   }
 
   async onDisconnect(): Promise<void> {
-    hilog.info(DOMAIN, TAG, 'onDisconnect start fd=%{public}d', this.tunFd);
+    hilog.debug(DOMAIN, TAG, 'onDisconnect start fd=%{public}d', this.tunFd);
     await this.destroyVpn();
     try {
       const store = new RuntimeStore(this.context.filesDir);
@@ -949,11 +951,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'runtime store update on disconnect failed: %{public}s', this.toErrorText(err));
     }
-    hilog.info(DOMAIN, TAG, 'onDisconnect complete');
+    hilog.debug(DOMAIN, TAG, 'onDisconnect complete');
   }
 
   onDestroy(): void {
-    hilog.info(DOMAIN, TAG, 'onDestroy fd=%{public}d', this.tunFd);
+    hilog.debug(DOMAIN, TAG, 'onDestroy fd=%{public}d', this.tunFd);
     // Do not destroy the VPN from lifecycle teardown. The extension can be
     // destroyed when the UI leaves foreground, while the VPN session must stay
     // alive until an explicit disconnect/onDisconnect path runs.
@@ -1047,11 +1049,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         break;
     }
 
-    hilog.info(DOMAIN, TAG,
-      'createPocConfig routeMode=%{public}s isBlocking=%{public}s routeCount=%{public}d dns=%{public}s interface=%{public}s defaultFlag=%{public}s routes=%{public}s',
+    hilog.debug(DOMAIN, TAG,
+      'createPocConfig routeMode=%{public}s isBlocking=%{public}s routeCount=%{public}d dns=%{private}s interface=%{private}s defaultFlag=%{public}s',
       routeMode, isBlocking ? 'true' : 'false', routes.length, dnsAddress,
-      routeInterface.length > 0 ? routeInterface : '<empty>', routeDefaultFlag ? 'true' : 'false',
-      JSON.stringify(routes));
+      routeInterface.length > 0 ? routeInterface : '<empty>', routeDefaultFlag ? 'true' : 'false');
 
     return {
       addresses: [
@@ -1078,7 +1079,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
     try {
       const written = await fs.write(fd, writeBuffer);
-      hilog.info(DOMAIN, TAG, 'tunFd write probe ok bytes=%{public}d fd=%{public}d', written, fd);
+      hilog.debug(DOMAIN, TAG, 'tunFd write probe ok bytes=%{public}d fd=%{public}d', written, fd);
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'tunFd write probe failed fd=%{public}d err=%{public}s',
         fd, this.toErrorText(err));
@@ -1087,7 +1088,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     try {
       const readBuffer = new ArrayBuffer(2048);
       const readBytes = await fs.read(fd, readBuffer);
-      hilog.info(DOMAIN, TAG, 'tunFd read probe ok bytes=%{public}d fd=%{public}d', readBytes, fd);
+      hilog.debug(DOMAIN, TAG, 'tunFd read probe ok bytes=%{public}d fd=%{public}d', readBytes, fd);
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'tunFd read probe failed or no packet available fd=%{public}d err=%{public}s',
         fd, this.toErrorText(err));
@@ -1106,7 +1107,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     this.tunBytes = 0;
     this.tunLoopbackPackets = 0;
     const fd = this.tunFd;
-    hilog.info(DOMAIN, TAG, 'tun reader starting fd=%{public}d', fd);
+    hilog.debug(DOMAIN, TAG, 'tun reader starting fd=%{public}d', fd);
 
     // Fire and forget - runs in background
     this.runTunReaderLoop(fd);
@@ -1122,11 +1123,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
           this.tunBytes += bytesRead;
           const packetSummary = this.describeIpv4Packet(readBuf, bytesRead);
           if (this.tunPackets % 50 === 1) {
-            hilog.info(DOMAIN, TAG, 'tun packets=%{public}d bytes=%{public}d loopback=%{public}d',
+            hilog.debug(DOMAIN, TAG, 'tun packets=%{public}d bytes=%{public}d loopback=%{public}d',
               this.tunPackets, this.tunBytes, this.tunLoopbackPackets);
           }
           if (this.poc03Options.tunPacketDump && this.tunPackets <= 12) {
-            hilog.info(DOMAIN, TAG, 'tun packet #%{public}d %{public}s',
+            hilog.debug(DOMAIN, TAG, 'tun packet #%{public}d %{public}s',
               this.tunPackets, packetSummary);
           }
         } else {
@@ -1139,18 +1140,18 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
             await this.sleep(TUN_EAGAIN_POLL_MS);
             continue;
           }
-          hilog.info(DOMAIN, TAG, 'tun reader stopping: %{public}s', errorText);
+          hilog.debug(DOMAIN, TAG, 'tun reader stopping: %{public}s', errorText);
         }
         break;
       }
     }
-    hilog.info(DOMAIN, TAG, 'tun reader stopped packets=%{public}d bytes=%{public}d',
+    hilog.debug(DOMAIN, TAG, 'tun reader stopped packets=%{public}d bytes=%{public}d',
       this.tunPackets, this.tunBytes);
   }
 
   private stopTunReader(): void {
     this.tunReading = false;
-    hilog.info(DOMAIN, TAG, 'tun reader stop requested final packets=%{public}d bytes=%{public}d',
+    hilog.debug(DOMAIN, TAG, 'tun reader stop requested final packets=%{public}d bytes=%{public}d',
       this.tunPackets, this.tunBytes);
   }
 
@@ -1166,11 +1167,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   // ---------- POC-03: Protect callback and socket tests ----------
 
   private async runRawUdpPreflight(): Promise<void> {
-    hilog.info(DOMAIN, TAG, 'POC-03 raw UDP preflight before VPN begin');
+    hilog.debug(DOMAIN, TAG, 'POC-03 raw UDP preflight before VPN begin');
     for (const target of this.getUdpTargets(true)) {
       try {
         const udpJson = await pocNative.runUdpTest(target.host, target.port, false);
-        hilog.info(DOMAIN, TAG,
+        hilog.debug(DOMAIN, TAG,
           'POC-03 raw UDP preflight label=%{public}s host=%{public}s port=%{public}d result=%{public}s',
           target.label, target.host, target.port, udpJson);
       } catch (err) {
@@ -1179,7 +1180,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
           target.label, target.host, target.port, this.toErrorText(err));
       }
     }
-    hilog.info(DOMAIN, TAG, 'POC-03 raw UDP preflight before VPN end');
+    hilog.debug(DOMAIN, TAG, 'POC-03 raw UDP preflight before VPN end');
   }
 
   private async initPoc03(): Promise<void> {
@@ -1188,15 +1189,15 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     // Step 1: Avoid synchronous Go calls on the VPN Extension ArkTS thread.
     // The first Go call is made by runTcpTest/runUdpTest on a NAPI async worker thread.
     this.poc03Results.push('POC-03 init begin');
-    hilog.info(DOMAIN, TAG, 'POC-03 init begin fd=%{public}d', this.tunFd);
+    hilog.debug(DOMAIN, TAG, 'POC-03 init begin fd=%{public}d', this.tunFd);
     this.poc03Results.push('POC-03 loadGoCore skipped in VPN main thread');
-    hilog.info(DOMAIN, TAG, 'POC-03 loadGoCore skipped in VPN main thread');
+    hilog.debug(DOMAIN, TAG, 'POC-03 loadGoCore skipped in VPN main thread');
 
     // Step 2: Register protect callback
     try {
-      hilog.info(DOMAIN, TAG, 'POC-03 calling registerProtect');
+      hilog.debug(DOMAIN, TAG, 'POC-03 calling registerProtect');
       const regStatus = pocNative.registerProtect(async (fd: number): Promise<number> => {
-        hilog.info(DOMAIN, TAG, 'POC-03 protect callback: protecting fd=%{public}d', fd);
+        hilog.debug(DOMAIN, TAG, 'POC-03 protect callback: protecting fd=%{public}d', fd);
         if (this.forceProtectFailure) {
           hilog.warn(DOMAIN, TAG, 'POC-03 protect forced failure fd=%{public}d', fd);
           return -900;
@@ -1207,7 +1208,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         }
         try {
           await this.vpnConnection.protect(fd);
-          hilog.info(DOMAIN, TAG, 'POC-03 protect success fd=%{public}d', fd);
+          hilog.debug(DOMAIN, TAG, 'POC-03 protect success fd=%{public}d', fd);
           return 0;
         } catch (err) {
           hilog.error(DOMAIN, TAG, 'POC-03 protect failed fd=%{public}d err=%{public}s',
@@ -1217,7 +1218,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       });
 
       this.protectRegistered = regStatus.ok;
-      hilog.info(DOMAIN, TAG, 'POC-03 registerProtect returned ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-03 registerProtect returned ok=%{public}s code=%{public}d msg=%{public}s',
         regStatus.ok ? 'true' : 'false', regStatus.code, regStatus.message);
       this.poc03Results.push('POC-03 registerProtect ok=' + regStatus.ok + ' msg=' + regStatus.message);
       if (!regStatus.ok) {
@@ -1230,21 +1231,21 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     }
 
     // Step 3: Start TUN reader for loopback detection
-    hilog.info(DOMAIN, TAG, 'POC-03 starting tun reader');
+    hilog.debug(DOMAIN, TAG, 'POC-03 starting tun reader');
     this.startTunReader();
 
     // Step 4: Wait briefly for TUN reader to stabilize
-    hilog.info(DOMAIN, TAG, 'POC-03 waiting before socket tests');
+    hilog.debug(DOMAIN, TAG, 'POC-03 waiting before socket tests');
     await this.sleep(300);
 
     // Step 5: Run POC-03 socket tests
-    hilog.info(DOMAIN, TAG, 'POC-03 calling socket tests');
+    hilog.debug(DOMAIN, TAG, 'POC-03 calling socket tests');
     await this.runPoc03SocketTests();
-    hilog.info(DOMAIN, TAG, 'POC-03 socket tests returned');
+    hilog.debug(DOMAIN, TAG, 'POC-03 socket tests returned');
   }
 
   private async runPoc03SocketTests(): Promise<void> {
-    hilog.info(DOMAIN, TAG, 'POC-03 socket tests begin');
+    hilog.debug(DOMAIN, TAG, 'POC-03 socket tests begin');
     let failures = 0;
 
     // --- Test 1: TCP with protect (expected: success) ---
@@ -1279,7 +1280,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         hilog.warn(DOMAIN, TAG, 'POC-03 possible loopback: loopbackDelta=%{public}d totalTunDelta=%{public}d',
           tunDelta, totalTunDelta);
       } else {
-        hilog.info(DOMAIN, TAG, 'POC-03 TCP+protect PASS loopbackDelta=%{public}d totalTunDelta=%{public}d',
+        hilog.debug(DOMAIN, TAG, 'POC-03 TCP+protect PASS loopbackDelta=%{public}d totalTunDelta=%{public}d',
           tunDelta, totalTunDelta);
       }
     } catch (err) {
@@ -1304,7 +1305,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         failures += 1;
         hilog.error(DOMAIN, TAG, 'POC-03 forced protect failure did not fail clearly: %{public}s', tcpFailJson);
       } else {
-        hilog.info(DOMAIN, TAG, 'POC-03 forced protect failure PASS: %{public}s', tcpFailJson);
+        hilog.debug(DOMAIN, TAG, 'POC-03 forced protect failure PASS: %{public}s', tcpFailJson);
       }
     } catch (err) {
       failures += 1;
@@ -1356,7 +1357,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         }
         hilog.error(DOMAIN, TAG, 'POC-03 UDP+protect FAILED: %{public}s', lastUdpJson);
       } else {
-        hilog.info(DOMAIN, TAG, 'POC-03 UDP+protect PASS loopbackDelta=%{public}d totalTunDelta=%{public}d',
+        hilog.debug(DOMAIN, TAG, 'POC-03 UDP+protect PASS loopbackDelta=%{public}d totalTunDelta=%{public}d',
           tunDeltaUdp, totalTunDeltaUdp);
       }
     } catch (err) {
@@ -1371,7 +1372,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       ' loopbackPackets=' + this.tunLoopbackPackets
     );
     for (const line of this.poc03Results) {
-      hilog.info(DOMAIN, TAG, 'POC-03: %{public}s', line);
+      hilog.debug(DOMAIN, TAG, 'POC-03: %{public}s', line);
     }
   }
 
@@ -1382,14 +1383,14 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     this.poc04Started = false;
 
     const homeDir = this.context.filesDir + '/poc04-mihomo';
-    hilog.info(DOMAIN, TAG, 'POC-04 init begin homeDir=%{public}s fd=%{public}d', homeDir, this.tunFd);
+    hilog.debug(DOMAIN, TAG, 'POC-04 init begin homeDir=%{private}s fd=%{public}d', homeDir, this.tunFd);
     this.poc04Results.push('POC-04 init begin homeDir=' + homeDir);
 
     try {
       const loadStatus = await pocNative.loadMihomoCore();
       this.poc04Results.push('POC-04 load ok=' + loadStatus.ok + ' code=' + loadStatus.code +
         ' msg=' + loadStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-04 load mihomo core ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-04 load mihomo core ok=%{public}s code=%{public}d msg=%{public}s',
         loadStatus.ok ? 'true' : 'false', loadStatus.code, loadStatus.message);
       if (!loadStatus.ok) {
         this.poc04Results.push('POC-04 self-test done failures=1');
@@ -1399,7 +1400,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const pingStatus = await pocNative.pingMihomo();
       this.poc04Results.push('POC-04 ping ok=' + pingStatus.ok + ' code=' + pingStatus.code +
         ' msg=' + pingStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-04 ping mihomo ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-04 ping mihomo ok=%{public}s code=%{public}d msg=%{public}s',
         pingStatus.ok ? 'true' : 'false', pingStatus.code, pingStatus.message);
       if (!pingStatus.ok) {
         this.poc04Results.push('POC-04 self-test done failures=1');
@@ -1408,7 +1409,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
       const versionStatus = await pocNative.getMihomoVersion();
       this.poc04Results.push('POC-04 version ok=' + versionStatus.ok + ' msg=' + versionStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-04 mihomo version ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-04 mihomo version ok=%{public}s code=%{public}d msg=%{public}s',
         versionStatus.ok ? 'true' : 'false', versionStatus.code, versionStatus.message);
       if (!versionStatus.ok) {
         this.poc04Results.push('POC-04 self-test done failures=1');
@@ -1420,7 +1421,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.mihomoStartedBy = startStatus.ok ? 'POC-04' : '';
       this.poc04Results.push('POC-04 start ok=' + startStatus.ok + ' code=' + startStatus.code +
         ' msg=' + startStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-04 start fixed config ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-04 start fixed config ok=%{public}s code=%{public}d msg=%{public}s',
         startStatus.ok ? 'true' : 'false', startStatus.code, startStatus.message);
       if (!startStatus.ok) {
         this.poc04Results.push('POC-04 self-test done failures=1');
@@ -1434,7 +1435,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.mihomoStartedBy = '';
       this.poc04Results.push('POC-04 stop ok=' + stopStatus.ok + ' code=' + stopStatus.code +
         ' msg=' + stopStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-04 stop ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-04 stop ok=%{public}s code=%{public}d msg=%{public}s',
         stopStatus.ok ? 'true' : 'false', stopStatus.code, stopStatus.message);
 
       this.poc04Results.push('POC-04 self-test done failures=' + (stopStatus.ok ? 0 : 1));
@@ -1445,7 +1446,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     }
 
     for (const line of this.poc04Results) {
-      hilog.info(DOMAIN, TAG, 'POC-04: %{public}s', line);
+      hilog.debug(DOMAIN, TAG, 'POC-04: %{public}s', line);
     }
   }
 
@@ -1458,7 +1459,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
     const layout = this.createPoc05Layout();
     let failures = 0;
-    hilog.info(DOMAIN, TAG, 'POC-05 init begin baseDir=%{public}s fd=%{public}d', layout.baseDir, this.tunFd);
+    hilog.debug(DOMAIN, TAG, 'POC-05 init begin baseDir=%{private}s fd=%{public}d', layout.baseDir, this.tunFd);
     this.poc05Results.push('POC-05 init begin baseDir=' + layout.baseDir);
 
     try {
@@ -1466,7 +1467,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const hadRuntimeBeforeWrite = this.pathExists(layout.runtimePath);
       this.poc05Results.push('POC-05 persisted files before write raw=' + hadRawBeforeWrite +
         ' runtime=' + hadRuntimeBeforeWrite);
-      hilog.info(DOMAIN, TAG, 'POC-05 persisted files before write raw=%{public}s runtime=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 persisted files before write raw=%{public}s runtime=%{public}s',
         hadRawBeforeWrite ? 'true' : 'false', hadRuntimeBeforeWrite ? 'true' : 'false');
 
       this.ensureDirSync(layout.homeDir);
@@ -1476,20 +1477,20 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.ensureDirSync(layout.geoDir);
       this.poc05Results.push('POC-05 directories ready home=' + layout.homeDir + ' profiles=' +
         layout.profileDir + ' run=' + layout.runDir + ' cache=' + layout.cacheDir + ' geo=' + layout.geoDir);
-      hilog.info(DOMAIN, TAG,
-        'POC-05 directories ready home=%{public}s profiles=%{public}s run=%{public}s cache=%{public}s geo=%{public}s',
+      hilog.debug(DOMAIN, TAG,
+        'POC-05 directories ready home=%{private}s profiles=%{private}s run=%{private}s cache=%{private}s geo=%{private}s',
         layout.homeDir, layout.profileDir, layout.runDir, layout.cacheDir, layout.geoDir);
 
       const rawBytes = this.writeTextFile(layout.rawPath, POC05_RAW_SUBSCRIPTION);
       this.poc05Results.push('POC-05 raw subscription saved path=' + layout.rawPath + ' bytes=' + rawBytes);
-      hilog.info(DOMAIN, TAG, 'POC-05 raw subscription saved path=%{public}s bytes=%{public}d',
+      hilog.debug(DOMAIN, TAG, 'POC-05 raw subscription saved path=%{private}s bytes=%{public}d',
         layout.rawPath, rawBytes);
 
       const unsupported = this.getUnsupportedConfigKeys(POC05_UNSUPPORTED_SUBSCRIPTION);
       const rejectedUnsupported = unsupported.indexOf('script') >= 0 && unsupported.indexOf('proxy-providers') >= 0;
       this.poc05Results.push('POC-05 unsupported config rejected keys=' + unsupported.join(',') +
         ' ok=' + rejectedUnsupported);
-      hilog.info(DOMAIN, TAG, 'POC-05 unsupported config rejected keys=%{public}s ok=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 unsupported config rejected keys=%{public}s ok=%{public}s',
         unsupported.join(','), rejectedUnsupported ? 'true' : 'false');
       if (!rejectedUnsupported) {
         failures += 1;
@@ -1503,13 +1504,13 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
       const runtimeBytes = this.writeTextFile(layout.runtimePath, POC05_RUNTIME_CONFIG);
       this.poc05Results.push('POC-05 runtime config saved path=' + layout.runtimePath + ' bytes=' + runtimeBytes);
-      hilog.info(DOMAIN, TAG, 'POC-05 runtime config saved path=%{public}s bytes=%{public}d',
+      hilog.debug(DOMAIN, TAG, 'POC-05 runtime config saved path=%{private}s bytes=%{public}d',
         layout.runtimePath, runtimeBytes);
 
       const readback = fs.readTextSync(layout.runtimePath);
       const readbackOk = readback === POC05_RUNTIME_CONFIG;
       this.poc05Results.push('POC-05 runtime config readback ok=' + readbackOk);
-      hilog.info(DOMAIN, TAG, 'POC-05 runtime config readback ok=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 runtime config readback ok=%{public}s',
         readbackOk ? 'true' : 'false');
       if (!readbackOk) {
         failures += 1;
@@ -1523,7 +1524,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
         this.isSubPath(layout.rawPath, layout.baseDir) &&
         this.isSubPath(layout.runtimePath, layout.baseDir);
       this.poc05Results.push('POC-05 sandbox path check ok=' + pathsInSandbox);
-      hilog.info(DOMAIN, TAG, 'POC-05 sandbox path check ok=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 sandbox path check ok=%{public}s',
         pathsInSandbox ? 'true' : 'false');
       if (!pathsInSandbox) {
         failures += 1;
@@ -1532,7 +1533,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const loadStatus = await pocNative.loadMihomoCore();
       this.poc05Results.push('POC-05 load ok=' + loadStatus.ok + ' code=' + loadStatus.code +
         ' msg=' + loadStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-05 load mihomo core ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 load mihomo core ok=%{public}s code=%{public}d msg=%{public}s',
         loadStatus.ok ? 'true' : 'false', loadStatus.code, loadStatus.message);
       if (!loadStatus.ok) {
         failures += 1;
@@ -1546,7 +1547,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.mihomoStartedBy = startStatus.ok ? 'POC-05' : '';
       this.poc05Results.push('POC-05 start generated config ok=' + startStatus.ok + ' code=' +
         startStatus.code + ' msg=' + startStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-05 start generated config ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 start generated config ok=%{public}s code=%{public}d msg=%{public}s',
         startStatus.ok ? 'true' : 'false', startStatus.code, startStatus.message);
       if (!startStatus.ok) {
         failures += 1;
@@ -1562,7 +1563,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const switchReadbackOk = switchReadback === POC05_RUNTIME_SWITCH_CONFIG;
       this.poc05Results.push('POC-05 switch config saved bytes=' + switchBytes +
         ' readbackOk=' + switchReadbackOk);
-      hilog.info(DOMAIN, TAG, 'POC-05 switch config saved bytes=%{public}d readbackOk=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 switch config saved bytes=%{public}d readbackOk=%{public}s',
         switchBytes, switchReadbackOk ? 'true' : 'false');
       if (!switchReadbackOk) {
         failures += 1;
@@ -1573,7 +1574,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.mihomoStartedBy = this.poc04Started ? 'POC-05' : '';
       this.poc05Results.push('POC-05 reload switched config ok=' + switchStatus.ok + ' code=' +
         switchStatus.code + ' msg=' + switchStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-05 reload switched config ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 reload switched config ok=%{public}s code=%{public}d msg=%{public}s',
         switchStatus.ok ? 'true' : 'false', switchStatus.code, switchStatus.message);
       if (!switchStatus.ok) {
         failures += 1;
@@ -1586,7 +1587,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.mihomoStartedBy = '';
       this.poc05Results.push('POC-05 stop ok=' + stopStatus.ok + ' code=' + stopStatus.code +
         ' msg=' + stopStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-05 stop ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 stop ok=%{public}s code=%{public}d msg=%{public}s',
         stopStatus.ok ? 'true' : 'false', stopStatus.code, stopStatus.message);
       if (!stopStatus.ok) {
         failures += 1;
@@ -1604,7 +1605,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   private logPoc05Results(): void {
     for (const line of this.poc05Results) {
-      hilog.info(DOMAIN, TAG, 'POC-05: %{public}s', line);
+      hilog.debug(DOMAIN, TAG, 'POC-05: %{public}s', line);
     }
   }
 
@@ -1613,7 +1614,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   private async initPoc06(): Promise<void> {
     let failures = 0;
     const layout = this.createPoc05Layout();
-    hilog.info(DOMAIN, TAG, 'POC-06 init begin fd=%{public}d state=%{public}s', this.tunFd, this.poc06State);
+    hilog.debug(DOMAIN, TAG, 'POC-06 init begin fd=%{public}d state=%{public}s', this.tunFd, this.poc06State);
     this.poc06Results.push('POC-06 init begin fd=' + this.tunFd + ' state=' + this.poc06State);
 
     try {
@@ -1623,7 +1624,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const loadStatus = await pocNative.loadMihomoCore();
       this.poc06Results.push('POC-06 load ok=' + loadStatus.ok + ' code=' + loadStatus.code +
         ' msg=' + loadStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-06 load mihomo core ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-06 load mihomo core ok=%{public}s code=%{public}d msg=%{public}s',
         loadStatus.ok ? 'true' : 'false', loadStatus.code, loadStatus.message);
       if (!loadStatus.ok) {
         failures += 1;
@@ -1639,7 +1640,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const badFailedAsExpected = !badStatus.ok;
       this.poc06Results.push('POC-06 invalid config rejected ok=' + badFailedAsExpected +
         ' code=' + badStatus.code + ' msg=' + badStatus.message);
-      hilog.info(DOMAIN, TAG,
+      hilog.debug(DOMAIN, TAG,
         'POC-06 invalid config rejected ok=%{public}s code=%{public}d msg=%{public}s',
         badFailedAsExpected ? 'true' : 'false', badStatus.code, badStatus.message);
       if (!badFailedAsExpected) {
@@ -1662,7 +1663,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.mihomoStartedBy = startStatus.ok ? 'POC-06' : '';
       this.poc06Results.push('POC-06 recovery start ok=' + startStatus.ok + ' code=' +
         startStatus.code + ' msg=' + startStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-06 recovery start ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-06 recovery start ok=%{public}s code=%{public}d msg=%{public}s',
         startStatus.ok ? 'true' : 'false', startStatus.code, startStatus.message);
       if (!startStatus.ok) {
         failures += 1;
@@ -1678,7 +1679,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const busyRejected = this.poc06Results.length > busyBefore &&
         this.poc06Results[this.poc06Results.length - 1].indexOf('busy start rejected') >= 0;
       this.poc06Results.push('POC-06 duplicate start rejected ok=' + busyRejected);
-      hilog.info(DOMAIN, TAG, 'POC-06 duplicate start rejected ok=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-06 duplicate start rejected ok=%{public}s',
         busyRejected ? 'true' : 'false');
       if (!busyRejected) {
         failures += 1;
@@ -1690,7 +1691,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       this.mihomoStartedBy = '';
       this.poc06Results.push('POC-06 first stop ok=' + stopStatus.ok + ' code=' +
         stopStatus.code + ' msg=' + stopStatus.message);
-      hilog.info(DOMAIN, TAG, 'POC-06 first stop ok=%{public}s code=%{public}d msg=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-06 first stop ok=%{public}s code=%{public}d msg=%{public}s',
         stopStatus.ok ? 'true' : 'false', stopStatus.code, stopStatus.message);
       if (!stopStatus.ok) {
         failures += 1;
@@ -1701,7 +1702,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       const secondStopOk = secondStopStatus.ok;
       this.poc06Results.push('POC-06 second stop idempotent ok=' + secondStopOk + ' code=' +
         secondStopStatus.code + ' msg=' + secondStopStatus.message);
-      hilog.info(DOMAIN, TAG,
+      hilog.debug(DOMAIN, TAG,
         'POC-06 second stop idempotent ok=%{public}s code=%{public}d msg=%{public}s',
         secondStopOk ? 'true' : 'false', secondStopStatus.code, secondStopStatus.message);
       if (!secondStopOk) {
@@ -1711,7 +1712,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       await this.destroyVpn();
       const destroyOk = this.tunFd < 0 && this.vpnConnection === null;
       this.poc06Results.push('POC-06 destroy recovery ok=' + destroyOk + ' fd=' + this.tunFd);
-      hilog.info(DOMAIN, TAG, 'POC-06 destroy recovery ok=%{public}s fd=%{public}d',
+      hilog.debug(DOMAIN, TAG, 'POC-06 destroy recovery ok=%{public}s fd=%{public}d',
         destroyOk ? 'true' : 'false', this.tunFd);
       if (!destroyOk) {
         failures += 1;
@@ -1736,7 +1737,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   private logPoc06Results(): void {
     for (const line of this.poc06Results) {
-      hilog.info(DOMAIN, TAG, 'POC-06: %{public}s', line);
+      hilog.debug(DOMAIN, TAG, 'POC-06: %{public}s', line);
     }
   }
 
@@ -1767,15 +1768,15 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
     // Log POC-03 results
     if (this.poc03Results.length > 0) {
-      hilog.info(DOMAIN, TAG, 'POC-03 results on destroy: %{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-03 results on destroy: %{public}s',
         JSON.stringify(this.poc03Results));
     }
     if (this.poc04Results.length > 0) {
-      hilog.info(DOMAIN, TAG, 'POC-04 results on destroy: %{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-04 results on destroy: %{public}s',
         JSON.stringify(this.poc04Results));
     }
     if (this.poc05Results.length > 0) {
-      hilog.info(DOMAIN, TAG, 'POC-05 results on destroy: %{public}s',
+      hilog.debug(DOMAIN, TAG, 'POC-05 results on destroy: %{public}s',
         JSON.stringify(this.poc05Results));
     }
 
@@ -1783,7 +1784,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     try {
       if (this.vpnConnection) {
         await this.vpnConnection.destroy();
-        hilog.info(DOMAIN, TAG, 'vpn destroyed fd=%{public}d', fd);
+        hilog.debug(DOMAIN, TAG, 'vpn destroyed fd=%{public}d', fd);
       }
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'vpn destroy failed fd=%{public}d err=%{public}s',
@@ -1826,7 +1827,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     this.poc06State = next;
     const line = 'POC-06 state ' + previous + ' -> ' + next + ' reason=' + reason;
     this.poc06Results.push(line);
-    hilog.info(DOMAIN, TAG, '%{public}s', line);
+    hilog.debug(DOMAIN, TAG, '%{public}s', line);
   }
 
   private createPoc06Want(reason: string): Want {

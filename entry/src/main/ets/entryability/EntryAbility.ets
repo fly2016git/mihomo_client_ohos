@@ -56,26 +56,26 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     this.ensureBundledGeoIp();
-    hilog.info(DOMAIN, TAG, 'Ability onCreate want=%{public}s', this.wantToLogText(want));
+    hilog.debug(DOMAIN, TAG, 'Ability onCreate want=%{public}s', this.wantToLogText(want));
     this.notifyUiRuntimeRefresh('onCreate');
     this.tryHandleMvpCommand(want, 'onCreate');
     this.tryStartVpnPocFromWant(want, 'onCreate');
   }
 
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    hilog.info(DOMAIN, TAG, 'Ability onNewWant want=%{public}s', this.wantToLogText(want));
+    hilog.debug(DOMAIN, TAG, 'Ability onNewWant want=%{public}s', this.wantToLogText(want));
     this.notifyUiRuntimeRefresh('onNewWant');
     this.tryHandleMvpCommand(want, 'onNewWant');
     this.tryStartVpnPocFromWant(want, 'onNewWant');
   }
 
   onDestroy(): void {
-    hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onDestroy');
+    hilog.debug(DOMAIN, TAG, '%{public}s', 'Ability onDestroy');
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
-    hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageCreate');
+    hilog.debug(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageCreate');
     this.windowStage = windowStage;
 
     this.loadMainContent('onWindowStageCreate');
@@ -83,26 +83,26 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageDestroy(): void {
     // Main window is destroyed, release UI related resources
-    hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageDestroy');
+    hilog.debug(DOMAIN, TAG, '%{public}s', 'Ability onWindowStageDestroy');
     this.windowStage = undefined;
   }
 
   onForeground(): void {
     // Ability has brought to foreground
-    hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onForeground');
+    hilog.debug(DOMAIN, TAG, '%{public}s', 'Ability onForeground');
     this.notifyUiRuntimeRefresh('onForeground');
   }
 
   onBackground(): void {
     // Ability has back to background
-    hilog.info(DOMAIN, TAG, '%{public}s', 'Ability onBackground');
+    hilog.debug(DOMAIN, TAG, '%{public}s', 'Ability onBackground');
   }
 
   private ensureBundledGeoIp(): void {
     try {
       const result = BundledGeoIpService.ensureInstalled(this.context.filesDir, this.context.resourceManager);
-      hilog.info(DOMAIN, TAG, 'GeoIP database %{public}s path=%{public}s bytes=%{public}d',
-        result.copied ? 'restored from bundle' : 'cache ready', result.path, result.bytes);
+      hilog.debug(DOMAIN, TAG, 'GeoIP database %{public}s bytes=%{public}d',
+        result.copied ? 'restored from bundle' : 'cache ready', result.bytes);
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'GeoIP database initialization failed: %{public}s', this.toErrorText(err));
     }
@@ -129,7 +129,7 @@ export default class EntryAbility extends UIAbility {
           source, JSON.stringify(err));
         return;
       }
-      hilog.info(DOMAIN, TAG, 'Succeeded loading content source=%{public}s', source);
+      hilog.debug(DOMAIN, TAG, 'Succeeded loading content source=%{public}s', source);
       this.notifyUiRuntimeRefresh('loadContent:' + source);
     });
   }
@@ -154,7 +154,7 @@ export default class EntryAbility extends UIAbility {
         requestedBy: source
       }
     }).then(() => {
-      hilog.info(DOMAIN, TAG, 'startVpnExtensionAbility returned ok poc=%{public}s source=%{public}s',
+      hilog.debug(DOMAIN, TAG, 'startVpnExtensionAbility returned ok poc=%{public}s source=%{public}s',
         poc, source);
     }).catch((err: Object) => {
       hilog.error(DOMAIN, TAG, 'startVpnExtensionAbility failed poc=%{public}s source=%{public}s err=%{public}s',
@@ -179,7 +179,7 @@ export default class EntryAbility extends UIAbility {
       if (command === 'setInvalidConfig') {
         const result = configService.forceWriteDefaultRawYamlForSmoke(MVP_INVALID_CONFIG);
         runtimeStore.appendEvent('MVP command setInvalidConfig ok=' + result.ok);
-        hilog.info(DOMAIN, TAG, 'mvpCommand setInvalidConfig source=%{public}s ok=%{public}s',
+        hilog.debug(DOMAIN, TAG, 'mvpCommand setInvalidConfig source=%{public}s ok=%{public}s',
           source, result.ok ? 'true' : 'false');
         return;
       }
@@ -187,13 +187,13 @@ export default class EntryAbility extends UIAbility {
         const result = configService.saveDefaultRawYaml(MVP_DEFAULT_CONFIG);
         runtimeStore.resetToIdle('MVP command setDefaultConfig');
         runtimeStore.appendEvent('MVP command setDefaultConfig ok=' + result.ok);
-        hilog.info(DOMAIN, TAG, 'mvpCommand setDefaultConfig source=%{public}s ok=%{public}s',
+        hilog.debug(DOMAIN, TAG, 'mvpCommand setDefaultConfig source=%{public}s ok=%{public}s',
           source, result.ok ? 'true' : 'false');
         return;
       }
       if (command === 'resetRuntime') {
         runtimeStore.resetToIdle('MVP command resetRuntime');
-        hilog.info(DOMAIN, TAG, 'mvpCommand resetRuntime source=%{public}s', source);
+        hilog.debug(DOMAIN, TAG, 'mvpCommand resetRuntime source=%{public}s', source);
         return;
       }
       if (command === 'validateConfig') {
@@ -202,7 +202,7 @@ export default class EntryAbility extends UIAbility {
         const validationService = new ConfigValidationService(this.context.filesDir);
         validationService.validate(content).then((result) => {
           runtimeStore.appendEvent('MVP command validateConfig case=' + validationCase + ' ok=' + result.ok);
-          hilog.info(DOMAIN, TAG, 'mvpCommand validateConfig complete case=%{public}s ok=%{public}s',
+          hilog.debug(DOMAIN, TAG, 'mvpCommand validateConfig complete case=%{public}s ok=%{public}s',
             validationCase, result.ok ? 'true' : 'false');
         }).catch((err: Object) => {
           hilog.error(DOMAIN, TAG, 'mvpCommand validateConfig failed case=%{public}s err=%{public}s',
@@ -236,7 +236,7 @@ export default class EntryAbility extends UIAbility {
           abilityName: VPN_ABILITY_NAME,
           parameters: connectParams
         }).then(() => {
-          hilog.info(DOMAIN, TAG, 'mvpCommand connectProduct returned ok source=%{public}s', source);
+          hilog.debug(DOMAIN, TAG, 'mvpCommand connectProduct returned ok source=%{public}s', source);
         }).catch((err: Object) => {
           hilog.error(DOMAIN, TAG, 'mvpCommand connectProduct failed source=%{public}s err=%{public}s',
             source, JSON.stringify(err));
@@ -253,7 +253,7 @@ export default class EntryAbility extends UIAbility {
             requestedBy: source + ':mvpCommand'
           }
         }).then(() => {
-          hilog.info(DOMAIN, TAG, 'mvpCommand disconnectProduct returned ok source=%{public}s', source);
+          hilog.debug(DOMAIN, TAG, 'mvpCommand disconnectProduct returned ok source=%{public}s', source);
         }).catch((err: Object) => {
           hilog.error(DOMAIN, TAG, 'mvpCommand disconnectProduct failed source=%{public}s err=%{public}s',
             source, JSON.stringify(err));
@@ -287,7 +287,7 @@ export default class EntryAbility extends UIAbility {
             requestedBy: source + ':mvpCommand'
           }
         }).then(() => {
-          hilog.info(DOMAIN, TAG, 'mvpCommand selectProxy returned ok request=%{public}s', requestId);
+          hilog.debug(DOMAIN, TAG, 'mvpCommand selectProxy returned ok request=%{public}s', requestId);
         }).catch((err: Object) => {
           hilog.error(DOMAIN, TAG, 'mvpCommand selectProxy failed request=%{public}s err=%{public}s',
             requestId, this.toErrorText(err));
@@ -324,7 +324,7 @@ export default class EntryAbility extends UIAbility {
       const activeProfile = configService.setActiveProfile(result.profile.id);
       runtimeStore.appendEvent('MVP command prepareSubscription ok profile=' + result.profile.id +
         ' bytes=' + result.result.bytes);
-      hilog.info(DOMAIN, TAG,
+      hilog.debug(DOMAIN, TAG,
         'mvpCommand prepareSubscription ok source=%{public}s profile=%{public}s active=%{public}s status=%{public}d bytes=%{public}d',
         source, result.profile.id, activeProfile ? 'true' : 'false', result.result.statusCode, result.result.bytes);
     }).catch((err: Object) => {

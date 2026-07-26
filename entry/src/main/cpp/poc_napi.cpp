@@ -21,6 +21,19 @@ constexpr const char *POC_LOG_TAG = "MihomoPocNapi";
 constexpr const char *GO_LIB_NAME = "libpoc_go_core.so";
 constexpr const char *MIHOMO_LIB_NAME = "libmihomo_ohos.so";
 
+#ifdef NDEBUG
+#define ClashGuardLog(level, format, ...)                                                                  \
+    do {                                                                                                   \
+        const LogLevel clashGuardLevel = (level);                                                          \
+        if (clashGuardLevel == LOG_WARN || clashGuardLevel == LOG_ERROR || clashGuardLevel == LOG_FATAL) { \
+            OH_LOG_Print(LOG_APP, clashGuardLevel, POC_LOG_DOMAIN, POC_LOG_TAG, format, ##__VA_ARGS__);    \
+        }                                                                                                  \
+    } while (false)
+#else
+#define ClashGuardLog(level, format, ...) \
+    OH_LOG_Print(LOG_APP, level, POC_LOG_DOMAIN, POC_LOG_TAG, format, ##__VA_ARGS__)
+#endif
+
 // ---------- POC-02: Go core function pointers ----------
 
 using PocGoVersionFn = const char *(*)();
@@ -223,7 +236,7 @@ void CompleteProtectPromise(ProtectPromiseCallbackContext *ctx, int error)
         g_protectError.store(error);
         g_protectDone.store(true);
 
-        OH_LOG_Print(LOG_APP, error == 0 ? LOG_INFO : LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(error == 0 ? LOG_INFO : LOG_WARN,
             "protect promise settled fd=%{public}d error=%{public}d", state->fd, error);
     }
 
@@ -301,11 +314,11 @@ void ProtectTsfnCallback(napi_env env, napi_value jsCallback, void *context, voi
 
     std::unique_ptr<int> fdPtr(static_cast<int *>(data));
     int fd = fdPtr == nullptr ? -1 : *fdPtr;
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "protect callback invoked fd=%{public}d", fd);
 
     if (jsCallback == nullptr) {
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "protect callback is null, fd=%{public}d", fd);
         g_protectError.store(-1);
         g_protectDone.store(true);
@@ -323,23 +336,23 @@ void ProtectTsfnCallback(napi_env env, napi_value jsCallback, void *context, voi
     napi_value result;
     napi_status status = napi_call_function(env, global, jsCallback, 1, args, &result);
     if (status != napi_ok) {
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "protect callback invocation failed status=%{public}d fd=%{public}d", status, fd);
         g_protectError.store(-2);
     } else {
         bool isPromise = false;
         if (napi_is_promise(env, result, &isPromise) == napi_ok && isPromise) {
             if (AttachProtectPromiseHandlers(env, result, fd)) {
-                OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                ClashGuardLog(LOG_INFO,
                     "protect callback returned promise fd=%{public}d", fd);
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_ERROR,
                 "protect promise handler attach failed fd=%{public}d", fd);
             g_protectError.store(-4);
         } else {
             int protectError = ProtectResultFromValue(env, result);
-            OH_LOG_Print(LOG_APP, protectError == 0 ? LOG_INFO : LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(protectError == 0 ? LOG_INFO : LOG_WARN,
                 "protect callback completed fd=%{public}d error=%{public}d", fd, protectError);
             g_protectError.store(protectError);
         }
@@ -354,13 +367,13 @@ extern "C" int NapiProtectBridgeImpl(int fd)
 {
     std::lock_guard<std::mutex> callLock(g_protectCallMutex);
 
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "NapiProtectBridgeImpl called fd=%{public}d", fd);
 
     {
         std::lock_guard<std::mutex> lock(g_protectCbMutex);
         if (g_protectTsfn == nullptr) {
-            OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_ERROR,
                 "protect tsfn not registered, fd=%{public}d", fd);
             return -1;
         }
@@ -374,7 +387,7 @@ extern "C" int NapiProtectBridgeImpl(int fd)
     napi_status status = napi_call_threadsafe_function(g_protectTsfn, queuedFd, napi_tsfn_blocking);
     if (status != napi_ok) {
         delete queuedFd;
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "napi_call_threadsafe_function failed status=%{public}d fd=%{public}d", status, fd);
         g_protectDone.store(true);
         g_protectError.store(-3);
@@ -390,14 +403,14 @@ extern "C" int NapiProtectBridgeImpl(int fd)
     }
 
     if (!g_protectDone.load()) {
-        OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_WARN,
             "protect timed out after %{public}d ms fd=%{public}d", waited, fd);
         g_protectError.store(-6);
     } else if (g_protectError.load() != 0) {
-        OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_WARN,
             "protect error=%{public}d fd=%{public}d", g_protectError.load(), fd);
     } else {
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "protect done ok fd=%{public}d", fd);
     }
 
@@ -412,7 +425,7 @@ bool LoadSymbol(void *handle, const char *name, void **out)
     *out = dlsym(handle, name);
     const char *err = dlerror();
     if (err != nullptr || *out == nullptr) {
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG, "dlsym %{public}s failed: %{public}s", name,
+        ClashGuardLog(LOG_ERROR, "dlsym %{public}s failed: %{public}s", name,
             err == nullptr ? "unknown" : err);
         return false;
     }
@@ -422,28 +435,28 @@ bool LoadSymbol(void *handle, const char *name, void **out)
 bool EnsureGoCoreLocked()
 {
     if (g_go.handle != nullptr) {
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "Go core already loaded, reuse handle");
         return true;
     }
 
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "dlopen %{public}s begin", GO_LIB_NAME);
     dlerror();
     void *handle = dlopen(GO_LIB_NAME, RTLD_NOW);
     if (handle == nullptr) {
         const char *err = dlerror();
         g_go.lastError = std::string("dlopen ") + GO_LIB_NAME + " failed: " + (err == nullptr ? "unknown" : err);
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG, "%{public}s", g_go.lastError.c_str());
+        ClashGuardLog(LOG_ERROR, "%{public}s", g_go.lastError.c_str());
         return false;
     }
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "dlopen %{public}s ok handle=%{public}p", GO_LIB_NAME, handle);
 
     GoCoreApi next;
     next.handle = handle;
     // POC-02 symbols (required)
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "resolving POC-02 Go symbols begin");
     bool ok = LoadSymbol(handle, "PocGoVersion", reinterpret_cast<void **>(&next.version)) &&
         LoadSymbol(handle, "PocGoAdd", reinterpret_cast<void **>(&next.add)) &&
@@ -458,11 +471,11 @@ bool EnsureGoCoreLocked()
         g_go.lastError = "Go core symbol resolution failed (POC-02)";
         return false;
     }
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "resolving POC-02 Go symbols ok");
 
     // POC-03 symbols (optional - only resolve if present)
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "resolving POC-03 Go symbols begin");
     bool hasTcpTest = LoadSymbol(handle, "PocGoTcpTest", reinterpret_cast<void **>(&next.tcpTest));
     bool hasUdpTest = LoadSymbol(handle, "PocGoUdpTest", reinterpret_cast<void **>(&next.udpTest));
@@ -470,17 +483,17 @@ bool EnsureGoCoreLocked()
         reinterpret_cast<void **>(&next.setProtectBridgeFn));
     bool hasDirectProtectBridgeSet = LoadSymbol(handle, "PocProtectBridgeSetFn",
         reinterpret_cast<void **>(&next.protectBridgeSetFn));
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "resolving POC-03 Go symbols done tcp=%{public}d udp=%{public}d goProtect=%{public}d cProtect=%{public}d",
         hasTcpTest ? 1 : 0, hasUdpTest ? 1 : 0, hasSetProtectBridge ? 1 : 0, hasDirectProtectBridgeSet ? 1 : 0);
 
     if (!hasTcpTest) {
-        OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_WARN,
             "PocGoTcpTest not found in Go core - POC-03 tcp test unavailable");
         next.tcpTest = nullptr;
     }
     if (!hasUdpTest) {
-        OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_WARN,
             "PocGoUdpTest not found in Go core - POC-03 udp test unavailable");
         next.udpTest = nullptr;
     }
@@ -488,19 +501,19 @@ bool EnsureGoCoreLocked()
     // Register the NAPI protect bridge directly into protect_bridge.c.
     // Avoid entering Go runtime only to set a C static function pointer.
     if (hasDirectProtectBridgeSet && next.protectBridgeSetFn != nullptr) {
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "calling PocProtectBridgeSetFn directly");
         next.protectBridgeSetFn(NapiProtectBridgeImpl);
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "protect bridge registered: C PocProtectBridge -> NAPI NapiProtectBridgeImpl");
     } else {
-        OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_WARN,
             "PocProtectBridgeSetFn not found - protect bridge not registered");
     }
 
     next.lastError.clear();
     g_go = next;
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "Go core loaded (POC-02 + POC-03 symbols)");
     return true;
 }
@@ -532,12 +545,12 @@ std::string TakeMihomoStringLocked(const char *value)
 bool EnsureMihomoCoreLocked()
 {
     if (g_mihomo.handle != nullptr) {
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "mihomo core already loaded, reuse handle");
         return true;
     }
 
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "dlopen %{public}s begin", MIHOMO_LIB_NAME);
     dlerror();
     void *handle = dlopen(MIHOMO_LIB_NAME, RTLD_NOW);
@@ -545,7 +558,7 @@ bool EnsureMihomoCoreLocked()
         const char *err = dlerror();
         g_mihomo.lastError = std::string("dlopen ") + MIHOMO_LIB_NAME + " failed: " +
             (err == nullptr ? "unknown" : err);
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG, "%{public}s", g_mihomo.lastError.c_str());
+        ClashGuardLog(LOG_ERROR, "%{public}s", g_mihomo.lastError.c_str());
         return false;
     }
 
@@ -586,7 +599,7 @@ bool EnsureMihomoCoreLocked()
     next.lastError.clear();
     next.setProtectBridge(reinterpret_cast<void *>(NapiProtectBridgeImpl));
     g_mihomo = next;
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "mihomo core loaded and protect bridge registered hooks=%{public}d/%{public}d/%{public}d graceful=%{public}d delay=%{public}d/%{public}d selector=%{public}d validator=%{public}d traffic=%{public}d writer=%{public}d/%{public}d",
         next.enableProtectHook != nullptr ? 1 : 0,
         next.disableProtectHook != nullptr ? 1 : 0,
@@ -698,13 +711,13 @@ napi_value LoadGoCore(napi_env env, napi_callback_info info)
         return MakeStatus(env, false, -1, g_go.lastError);
     }
 
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "calling PocGoVersion");
     const char *versionPtr = g_go.version();
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "PocGoVersion returned ptr=%{public}p", versionPtr);
     std::string version = TakeGoStringLocked(versionPtr);
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "LoadGoCore version copied");
     return MakeStatus(env, true, 0, version);
 }
@@ -830,12 +843,12 @@ napi_value RegisterProtect(napi_env env, napi_callback_info info)
 
     if (status != napi_ok) {
         g_protectTsfn = nullptr;
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "napi_create_threadsafe_function failed status=%{public}d", status);
         return MakeStatus(env, false, -3, "failed to create protect threadsafe function");
     }
 
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG, "protect callback registered");
+    ClashGuardLog(LOG_INFO, "protect callback registered");
     return MakeStatus(env, true, 0, "protect callback registered");
 }
 
@@ -905,7 +918,7 @@ napi_value RunTcpTest(napi_env env, napi_callback_info info)
             } else if (!workData->error.empty()) {
                 napi_reject_deferred(env, workData->deferred, MakeString(env, workData->error));
             } else {
-                OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                ClashGuardLog(LOG_INFO,
                     "tcp test result: %{public}s", workData->result.c_str());
                 napi_resolve_deferred(env, workData->deferred, MakeString(env, workData->result));
             }
@@ -988,7 +1001,7 @@ napi_value RunUdpTest(napi_env env, napi_callback_info info)
             } else if (!workData->error.empty()) {
                 napi_reject_deferred(env, workData->deferred, MakeString(env, workData->error));
             } else {
-                OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                ClashGuardLog(LOG_INFO,
                     "udp test result: %{public}s", workData->result.c_str());
                 napi_resolve_deferred(env, workData->deferred, MakeString(env, workData->result));
             }
@@ -1044,13 +1057,13 @@ napi_value GetMihomoVersion(napi_env env, napi_callback_info info)
                 workData->message = g_mihomo.lastError;
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 calling MihomoOhosVersion");
             const char *versionPtr = g_mihomo.version();
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 MihomoOhosVersion returned ptr=%{public}p", versionPtr);
             workData->message = TakeMihomoStringLocked(versionPtr);
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 MihomoOhosVersion copied value=%{public}s", workData->message.c_str());
             workData->code = 0;
             workData->ok = true;
@@ -1114,12 +1127,12 @@ napi_value StartMihomoConfig(napi_env env, napi_callback_info info)
                 workData->message = g_mihomo.lastError;
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
-                "POC-04 calling MihomoOhosStartConfig homeDir=%{public}s configLen=%{public}zu",
+            ClashGuardLog(LOG_INFO,
+                "POC-04 calling MihomoOhosStartConfig homeDir=%{private}s configLen=%{public}zu",
                 workData->homeDir.c_str(), workData->config.size());
             int32_t code = g_mihomo.startConfig(workData->homeDir.c_str(), workData->config.c_str(),
                 static_cast<int32_t>(workData->config.size()));
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 MihomoOhosStartConfig returned code=%{public}d", code);
             workData->code = code;
             workData->ok = code == 0;
@@ -1184,11 +1197,11 @@ napi_value StartMihomoConfigFile(napi_env env, napi_callback_info info)
                 workData->message = g_mihomo.lastError;
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
-                "POC-05 calling MihomoOhosStartConfigFile homeDir=%{public}s configPath=%{public}s",
+            ClashGuardLog(LOG_INFO,
+                "POC-05 calling MihomoOhosStartConfigFile homeDir=%{private}s configPath=%{private}s",
                 workData->homeDir.c_str(), workData->config.c_str());
             int32_t code = g_mihomo.startConfigFile(workData->homeDir.c_str(), workData->config.c_str());
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-05 MihomoOhosStartConfigFile returned code=%{public}d", code);
             workData->code = code;
             workData->ok = code == 0;
@@ -1233,7 +1246,7 @@ napi_value StartMihomoConfigFileWithTunFd(napi_env env, napi_callback_info info)
 
     int32_t mihomoTunFd = dup(tunFd);
     if (mihomoTunFd < 0) {
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "MVP-01B dup tun fd for mihomo failed tunFd=%{public}d errno=%{public}d", tunFd, errno);
         return MakeRejectedPromise(env, "failed to dup tun fd for mihomo");
     }
@@ -1241,7 +1254,7 @@ napi_value StartMihomoConfigFileWithTunFd(napi_env env, napi_callback_info info)
     if (flags >= 0) {
         (void)fcntl(mihomoTunFd, F_SETFL, flags | O_NONBLOCK);
     } else {
-        OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_WARN,
             "MVP-01B get tun fd flags failed tunFd=%{public}d mihomoTunFd=%{public}d errno=%{public}d",
             tunFd, mihomoTunFd, errno);
     }
@@ -1277,12 +1290,12 @@ napi_value StartMihomoConfigFileWithTunFd(napi_env env, napi_callback_info info)
                 return;
             }
             g_mihomo.setProtectBridge(reinterpret_cast<void *>(NapiProtectBridgeImpl));
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
-                "MVP-01B calling MihomoOhosStartConfigFileWithTunFd homeDir=%{public}s configPath=%{public}s tunFd=%{public}d mihomoTunFd=%{public}d",
+            ClashGuardLog(LOG_INFO,
+                "MVP-01B calling MihomoOhosStartConfigFileWithTunFd homeDir=%{private}s configPath=%{private}s tunFd=%{public}d mihomoTunFd=%{public}d",
                 workData->homeDir.c_str(), workData->config.c_str(), workData->originalTunFd, workData->tunFd);
             int32_t code = g_mihomo.startConfigFileWithTunFd(
                 workData->homeDir.c_str(), workData->config.c_str(), workData->tunFd);
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "MVP-01B MihomoOhosStartConfigFileWithTunFd returned code=%{public}d tunFd=%{public}d mihomoTunFd=%{public}d",
                 code, workData->originalTunFd, workData->tunFd);
             if (code != 0) {
@@ -1298,7 +1311,7 @@ napi_value StartMihomoConfigFileWithTunFd(napi_env env, napi_callback_info info)
                     workData->message = status;
                 }
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "MVP-01B MihomoOhosStartConfigFileWithTunFd status=%{public}s",
                 workData->message.c_str());
         },
@@ -1345,10 +1358,10 @@ napi_value StopMihomo(napi_env env, napi_callback_info info)
                 workData->message = g_mihomo.lastError;
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 calling MihomoOhosStop");
             int32_t code = g_mihomo.stop();
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 MihomoOhosStop returned code=%{public}d", code);
             workData->code = code;
             workData->ok = code == 0;
@@ -1394,13 +1407,13 @@ napi_value StartTunFdReadinessProbe(napi_env env, napi_callback_info info)
     int probeFd = dup(tunFd);
     if (probeFd < 0) {
         g_tunProbeRunning.store(false);
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "TUN readiness probe dup failed tunFd=%{public}d errno=%{public}d", tunFd, errno);
         return MakeStatus(env, false, -3, "dup tun fd failed");
     }
 
     std::thread([probeFd, tunFd, durationMs]() {
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "TUN readiness probe begin tunFd=%{public}d probeFd=%{public}d durationMs=%{public}d",
             tunFd, probeFd, durationMs);
 
@@ -1422,7 +1435,7 @@ napi_value StartTunFdReadinessProbe(napi_env env, napi_callback_info info)
                 if ((pfd.revents & POLLIN) != 0) {
                     pollInCount++;
                     if (pollInCount == 1 || pollInCount % 10 == 0) {
-                        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                        ClashGuardLog(LOG_INFO,
                             "TUN readiness probe POLLIN tunFd=%{public}d probeFd=%{public}d count=%{public}d revents=0x%{public}x",
                             tunFd, probeFd, pollInCount, pfd.revents);
                     }
@@ -1441,13 +1454,13 @@ napi_value StartTunFdReadinessProbe(napi_env env, napi_callback_info info)
                             uint8_t dst1 = readBytes >= 20 ? packet[17] : 0;
                             uint8_t dst2 = readBytes >= 20 ? packet[18] : 0;
                             uint8_t dst3 = readBytes >= 20 ? packet[19] : 0;
-                            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                            ClashGuardLog(LOG_INFO,
                                 "TUN readiness sample sample=%{public}d bytes=%{public}zd ipver=%{public}u proto=%{public}u src=%{public}u.%{public}u.%{public}u.%{public}u dst=%{public}u.%{public}u.%{public}u.%{public}u",
                                 sampleCount, readBytes, version, proto,
                                 src0, src1, src2, src3, dst0, dst1, dst2, dst3);
                         } else if (readBytes < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
                             errorCount++;
-                            OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+                            ClashGuardLog(LOG_WARN,
                                 "TUN readiness probe read failed tunFd=%{public}d probeFd=%{public}d errno=%{public}d",
                                 tunFd, probeFd, errno);
                         }
@@ -1456,7 +1469,7 @@ napi_value StartTunFdReadinessProbe(napi_env env, napi_callback_info info)
                 }
                 if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
                     errorCount++;
-                    OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+                    ClashGuardLog(LOG_WARN,
                         "TUN readiness probe event tunFd=%{public}d probeFd=%{public}d revents=0x%{public}x",
                         tunFd, probeFd, pfd.revents);
                     if ((pfd.revents & POLLNVAL) != 0) {
@@ -1466,13 +1479,13 @@ napi_value StartTunFdReadinessProbe(napi_env env, napi_callback_info info)
             } else if (ret == 0) {
                 timeoutCount++;
                 if (timeoutCount == 1 || timeoutCount % 10 == 0) {
-                    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                    ClashGuardLog(LOG_INFO,
                         "TUN readiness probe waiting tunFd=%{public}d probeFd=%{public}d seconds=%{public}d",
                         tunFd, probeFd, timeoutCount);
                 }
             } else {
                 errorCount++;
-                OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+                ClashGuardLog(LOG_WARN,
                     "TUN readiness probe poll failed tunFd=%{public}d probeFd=%{public}d errno=%{public}d",
                     tunFd, probeFd, errno);
                 if (errno != EINTR) {
@@ -1482,7 +1495,7 @@ napi_value StartTunFdReadinessProbe(napi_env env, napi_callback_info info)
         }
 
         close(probeFd);
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "TUN readiness probe done tunFd=%{public}d pollIn=%{public}d samples=%{public}d timeout=%{public}d errors=%{public}d",
             tunFd, pollInCount, sampleCount, timeoutCount, errorCount);
         g_tunProbeRunning.store(false);
@@ -1517,13 +1530,13 @@ napi_value StartTunFdPollProbe(napi_env env, napi_callback_info info)
     int probeFd = dup(tunFd);
     if (probeFd < 0) {
         g_tunProbeRunning.store(false);
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "TUN poll probe dup failed tunFd=%{public}d errno=%{public}d", tunFd, errno);
         return MakeStatus(env, false, -3, "dup tun fd failed");
     }
 
     std::thread([probeFd, tunFd, durationMs]() {
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "TUN poll probe begin tunFd=%{public}d probeFd=%{public}d durationMs=%{public}d",
             tunFd, probeFd, durationMs);
 
@@ -1545,7 +1558,7 @@ napi_value StartTunFdPollProbe(napi_env env, napi_callback_info info)
                 if ((pfd.revents & POLLIN) != 0) {
                     pollInCount++;
                     if (pollInCount == 1 || pollInCount % 100000 == 0) {
-                        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                        ClashGuardLog(LOG_INFO,
                             "TUN poll probe POLLIN tunFd=%{public}d probeFd=%{public}d count=%{public}d revents=0x%{public}x",
                             tunFd, probeFd, pollInCount, pfd.revents);
                     }
@@ -1553,7 +1566,7 @@ napi_value StartTunFdPollProbe(napi_env env, napi_callback_info info)
                 }
                 if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
                     errorCount++;
-                    OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+                    ClashGuardLog(LOG_WARN,
                         "TUN poll probe event tunFd=%{public}d probeFd=%{public}d revents=0x%{public}x",
                         tunFd, probeFd, pfd.revents);
                     if ((pfd.revents & POLLNVAL) != 0) {
@@ -1563,13 +1576,13 @@ napi_value StartTunFdPollProbe(napi_env env, napi_callback_info info)
             } else if (ret == 0) {
                 timeoutCount++;
                 if (timeoutCount == 1 || timeoutCount % 10 == 0) {
-                    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                    ClashGuardLog(LOG_INFO,
                         "TUN poll probe waiting tunFd=%{public}d probeFd=%{public}d seconds=%{public}d",
                         tunFd, probeFd, timeoutCount);
                 }
             } else {
                 errorCount++;
-                OH_LOG_Print(LOG_APP, LOG_WARN, POC_LOG_DOMAIN, POC_LOG_TAG,
+                ClashGuardLog(LOG_WARN,
                     "TUN poll probe poll failed tunFd=%{public}d probeFd=%{public}d errno=%{public}d",
                     tunFd, probeFd, errno);
                 if (errno != EINTR) {
@@ -1579,7 +1592,7 @@ napi_value StartTunFdPollProbe(napi_env env, napi_callback_info info)
         }
 
         close(probeFd);
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "TUN poll probe done tunFd=%{public}d pollIn=%{public}d timeout=%{public}d errors=%{public}d",
             tunFd, pollInCount, timeoutCount, errorCount);
         g_tunProbeRunning.store(false);
@@ -1601,7 +1614,7 @@ napi_value HoldTunFdReference(napi_env env, napi_callback_info info)
 
     int heldFd = dup(tunFd);
     if (heldFd < 0) {
-        OH_LOG_Print(LOG_APP, LOG_ERROR, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_ERROR,
             "TUN fd hold dup failed tunFd=%{public}d errno=%{public}d", tunFd, errno);
         return MakeStatus(env, false, -2, "dup tun fd failed");
     }
@@ -1611,7 +1624,7 @@ napi_value HoldTunFdReference(napi_env env, napi_callback_info info)
         close(g_heldTunFd);
     }
     g_heldTunFd = heldFd;
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "TUN fd hold active tunFd=%{public}d heldFd=%{public}d", tunFd, heldFd);
     return MakeStatus(env, true, 0, "tun fd reference held");
 }
@@ -1627,7 +1640,7 @@ napi_value ReleaseTunFdReference(napi_env env, napi_callback_info info)
     }
     if (releasedFd >= 0) {
         close(releasedFd);
-        OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+        ClashGuardLog(LOG_INFO,
             "TUN fd hold released heldFd=%{public}d", releasedFd);
         return MakeStatus(env, true, 0, "tun fd reference released");
     }
@@ -1656,7 +1669,7 @@ napi_value LoadMihomoCore(napi_env env, napi_callback_info info)
             (void)env;
             auto *workData = static_cast<MihomoAsyncData *>(rawData);
             std::lock_guard<std::mutex> lock(g_mihomoMutex);
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 loadMihomoCore worker begin");
             if (!EnsureMihomoCoreLocked()) {
                 workData->code = -1;
@@ -1667,7 +1680,7 @@ napi_value LoadMihomoCore(napi_env env, napi_callback_info info)
             workData->code = 0;
             workData->ok = true;
             workData->message = "mihomo core loaded";
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 loadMihomoCore worker done");
         },
         CompleteMihomoAsync,
@@ -1712,10 +1725,10 @@ napi_value PingMihomo(napi_env env, napi_callback_info info)
                 workData->message = g_mihomo.lastError;
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 calling MihomoOhosPing");
             int32_t code = g_mihomo.ping();
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "POC-04 MihomoOhosPing returned code=%{public}d", code);
             workData->code = code;
             workData->ok = code == 404;
@@ -1819,7 +1832,7 @@ napi_value TestMihomoDelay(napi_env env, napi_callback_info info, bool group)
             } else if (!workData->error.empty()) {
                 napi_reject_deferred(env, workData->deferred, MakeString(env, workData->error));
             } else {
-                OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+                ClashGuardLog(LOG_INFO,
                     "mihomo delay result: %{public}s", workData->result.c_str());
                 napi_resolve_deferred(env, workData->deferred, MakeString(env, workData->result));
             }
@@ -2154,10 +2167,10 @@ napi_value EnableProtectHook(napi_env env, napi_callback_info info)
     if (g_mihomo.enableProtectHook == nullptr) {
         return MakeStatus(env, false, -1, "MihomoOhosEnableProtectHook not available");
     }
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "MVP-01B calling MihomoOhosEnableProtectHook (sync)");
     int32_t code = g_mihomo.enableProtectHook();
-    OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+    ClashGuardLog(LOG_INFO,
         "MVP-01B MihomoOhosEnableProtectHook returned code=%{public}d", code);
     return MakeStatus(env, code == 0, code,
         code == 0 ? "protect hook enabled" : "protect hook enable failed");
@@ -2197,10 +2210,10 @@ napi_value DisableProtectHook(napi_env env, napi_callback_info info)
                 workData->message = "MihomoOhosDisableProtectHook not available";
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "MVP-01B calling MihomoOhosDisableProtectHook (async)");
             int32_t code = g_mihomo.disableProtectHook();
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "MVP-01B MihomoOhosDisableProtectHook returned code=%{public}d", code);
             workData->code = code;
             workData->ok = code == 0;
@@ -2272,10 +2285,10 @@ napi_value GracefulStopMihomo(napi_env env, napi_callback_info info)
                 workData->message = "MihomoOhosGracefulStop not available";
                 return;
             }
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "MVP-01B calling MihomoOhosGracefulStop (async)");
             int32_t code = g_mihomo.gracefulStop();
-            OH_LOG_Print(LOG_APP, LOG_INFO, POC_LOG_DOMAIN, POC_LOG_TAG,
+            ClashGuardLog(LOG_INFO,
                 "MVP-01B MihomoOhosGracefulStop returned code=%{public}d", code);
             workData->code = code;
             workData->ok = code == 0;

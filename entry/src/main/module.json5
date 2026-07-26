@@ -53,7 +53,7 @@
         "name": "MihomoPocVpnAbility",
         "srcEntry": "./ets/vpnability/MihomoPocVpnAbility.ets",
         "type": "vpn",
-        "exported": true,
+        "exported": false,
         "icon": "$media:layered_image",
         "label": "$string:vpn_extension_label",
         "description": "$string:vpn_extension_desc"

@@ -31,6 +31,10 @@ assert_manifest '.app.vendor == "fly2016"' \
   'release HAP has an unexpected vendor'
 assert_manifest '.app.versionName == "1.0.0" and .app.versionCode == 1000000' \
   'release HAP has an unexpected version'
+assert_manifest '.module.abilities[] | select(.name == "EntryAbility") | .exported == true' \
+  'release HAP launcher ability is not exported'
+assert_manifest '.module.extensionAbilities[] | select(.name == "MihomoPocVpnAbility") | .exported == false' \
+  'release HAP VPN extension is externally exported'
 
 if ! jq -e '.allowToBackupRestore == false' >/dev/null <<<"$backup_config"; then
   echo 'release HAP allows application backup or restore' >&2
@@ -39,6 +43,13 @@ fi
 
 if unzip -p "$HAP_PATH" ets/modules.abc | strings | grep -E '客户端原型|Mihomo POC VPN' >/dev/null; then
   echo 'release HAP contains prototype product text' >&2
+  exit 1
+fi
+
+if unzip -p "$HAP_PATH" libs/arm64-v8a/libpoc_napi.so | strings | \
+  grep -E 'protect callback invoked|Go core already loaded|calling PocGoVersion|mihomo core loaded and protect bridge registered' \
+  >/dev/null; then
+  echo 'release HAP contains verbose native diagnostic logs' >&2
   exit 1
 fi
 

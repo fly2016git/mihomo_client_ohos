@@ -19,6 +19,9 @@ echo "== diff checks =="
 git -C "$ROOT_DIR" diff --check -- . ':(exclude)patches/*.patch'
 git -C "$ROOT_DIR/core/mihomo" diff --check
 
+echo "== local unit tests =="
+"$ROOT_DIR/scripts/run_local_unit_tests.sh"
+
 echo "== Go config validation tests =="
 GOCACHE="${POC04_GOCACHE:-/private/tmp/poc04-go-build-cache}" \
 GOMODCACHE="${POC04_GOMODCACHE:-/private/tmp/poc04-go-mod-cache}" \
