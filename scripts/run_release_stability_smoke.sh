@@ -19,6 +19,21 @@ run_hdc() {
   "$HDC" -t "$POC_DEVICE_TARGET" "$@"
 }
 
+install_hap() {
+  local hap_path="$1"
+  local install_output
+
+  if ! install_output="$(run_hdc install -r "$hap_path" 2>&1)"; then
+    printf '%s\n' "$install_output" >&2
+    return 1
+  fi
+  printf '%s\n' "$install_output"
+  if grep -Eiq 'msg:error|failed to install bundle|signature verification failed' <<<"$install_output"; then
+    echo 'release HAP installation failed' >&2
+    return 1
+  fi
+}
+
 start_home() {
   run_hdc shell aa start -b "$POC_BUNDLE_NAME" -a "$POC_ENTRY_ABILITY" "$@"
 }
@@ -117,7 +132,7 @@ echo "cycles: $CYCLES"
 
 assert_idle
 if [ "$SKIP_INSTALL" != "true" ]; then
-  run_hdc install -r "$POC_ENTRY_HAP"
+  install_hap "$POC_ENTRY_HAP"
 fi
 assert_idle
 
