@@ -1,7 +1,7 @@
 import fs from '@ohos.file.fs';
 import { ConfigService } from '../config/ConfigService';
 
-export const CURRENT_AGREEMENT_VERSION = '2026-07-26';
+export const CURRENT_AGREEMENT_VERSION = '2026-07-27';
 
 interface AgreementState {
   version: string;
