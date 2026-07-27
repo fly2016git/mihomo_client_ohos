@@ -29,7 +29,7 @@ assert_manifest '.app.bundleName == "com.fly.clashguard"' \
   'release HAP has an unexpected bundle name'
 assert_manifest '.app.vendor == "fly2016"' \
   'release HAP has an unexpected vendor'
-assert_manifest '.app.versionName == "1.0.0" and .app.versionCode == 1000000' \
+assert_manifest '.app.versionName == "1.0.1" and .app.versionCode == 1000001' \
   'release HAP has an unexpected version'
 assert_manifest '.module.abilities[] | select(.name == "EntryAbility") | .exported == true' \
   'release HAP launcher ability is not exported'
