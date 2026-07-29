@@ -14,18 +14,19 @@ export interface BundledGeoIpResult {
 }
 
 export class BundledGeoIpService {
-  static ensureInstalled(filesDir: string, manager: resourceManager.ResourceManager): BundledGeoIpResult {
+  static async ensureInstalled(filesDir: string,
+    manager: resourceManager.ResourceManager): Promise<BundledGeoIpResult> {
     const layout = new ConfigService(filesDir).ensureLayout();
     const targetPath = layout.homeDir + '/' + RAW_FILE_NAME;
-    if (BundledGeoIpService.isValidDatabaseFile(targetPath)) {
+    if (await BundledGeoIpService.isValidDatabaseFile(targetPath)) {
       return {
         copied: false,
         path: targetPath,
-        bytes: fs.statSync(targetPath).size
+        bytes: (await fs.stat(targetPath)).size
       };
     }
 
-    const content = manager.getRawFileContentSync(RAW_FILE_NAME);
+    const content = await manager.getRawFileContent(RAW_FILE_NAME);
     if (!BundledGeoIpService.isValidDatabaseContent(content)) {
       throw new Error('Bundled geoip.metadb is invalid');
     }
@@ -33,14 +34,14 @@ export class BundledGeoIpService {
     const tmpPath = targetPath + '.tmp.' + Date.now().toString() + '.' +
       Math.floor(Math.random() * 1000000).toString();
     try {
-      BundledGeoIpService.writeBytes(tmpPath, content);
-      if (fs.statSync(tmpPath).size !== content.byteLength ||
-        !BundledGeoIpService.isValidDatabaseFile(tmpPath)) {
+      await BundledGeoIpService.writeBytes(tmpPath, content);
+      if ((await fs.stat(tmpPath)).size !== content.byteLength ||
+        !(await BundledGeoIpService.isValidDatabaseFile(tmpPath))) {
         throw new Error('Copied geoip.metadb failed validation');
       }
-      fs.renameSync(tmpPath, targetPath);
+      await fs.rename(tmpPath, targetPath);
     } catch (err) {
-      BundledGeoIpService.removeIfPresent(tmpPath);
+      await BundledGeoIpService.removeIfPresent(tmpPath);
       throw new Error(String(err));
     }
 
@@ -59,17 +60,17 @@ export class BundledGeoIpService {
     return BundledGeoIpService.containsAscii(content, start, 'MaxMind.com');
   }
 
-  private static isValidDatabaseFile(path: string): boolean {
+  private static async isValidDatabaseFile(path: string): Promise<boolean> {
     try {
-      const size = fs.statSync(path).size;
+      const size = (await fs.stat(path)).size;
       if (size < MIN_DATABASE_BYTES) {
         return false;
       }
       const tailLength = Math.min(size, METADATA_SCAN_BYTES);
       const buffer = new ArrayBuffer(tailLength);
-      const file = fs.openSync(path, fs.OpenMode.READ_ONLY);
+      const file = await fs.open(path, fs.OpenMode.READ_ONLY);
       try {
-        const bytesRead = fs.readSync(file.fd, buffer, {
+        const bytesRead = await fs.read(file.fd, buffer, {
           offset: size - tailLength,
           length: tailLength
         });
@@ -78,7 +79,7 @@ export class BundledGeoIpService {
         }
         return BundledGeoIpService.containsAscii(new Uint8Array(buffer, 0, bytesRead), 0, 'MaxMind.com');
       } finally {
-        fs.closeSync(file);
+        await fs.close(file);
       }
     } catch (_) {
       return false;
@@ -105,28 +106,28 @@ export class BundledGeoIpService {
     return false;
   }
 
-  private static writeBytes(path: string, content: Uint8Array): void {
-    const file = fs.openSync(path, fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+  private static async writeBytes(path: string, content: Uint8Array): Promise<void> {
+    const file = await fs.open(path, fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
     try {
       let offset = 0;
       while (offset < content.byteLength) {
         const end = Math.min(offset + COPY_CHUNK_BYTES, content.byteLength);
         const chunk = content.slice(offset, end);
-        const written = fs.writeSync(file.fd, chunk.buffer);
+        const written = await fs.write(file.fd, chunk.buffer);
         if (written <= 0) {
           throw new Error('Unable to write bundled geoip.metadb');
         }
         offset += written;
       }
     } finally {
-      fs.closeSync(file);
+      await fs.close(file);
     }
   }
 
-  private static removeIfPresent(path: string): void {
+  private static async removeIfPresent(path: string): Promise<void> {
     try {
-      if (fs.accessSync(path)) {
-        fs.unlinkSync(path);
+      if (await fs.access(path)) {
+        await fs.unlink(path);
       }
     } catch (_) {
     }

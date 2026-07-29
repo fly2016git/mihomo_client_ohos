@@ -429,7 +429,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       }
 
       try {
-        const geoIp = BundledGeoIpService.ensureInstalled(this.context.filesDir, this.context.resourceManager);
+        const geoIp = await BundledGeoIpService.ensureInstalled(this.context.filesDir, this.context.resourceManager);
         store.appendEvent('GeoIP database ' + (geoIp.copied ? 'restored from bundle' : 'cache ready') +
           ' bytes=' + geoIp.bytes.toString(), 'info', 'core');
       } catch (err) {

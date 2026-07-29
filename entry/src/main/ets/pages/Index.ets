@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { curves, display } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
 import { picker } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -91,6 +92,8 @@ struct Index {
   @State agreementReady: boolean = false;
   @State agreementAccepted: boolean = false;
   @State agreementError: string = '';
+  @State pageTransitionOpacity: number = 1;
+  @State pageTransitionScale: number = 1;
 
   private configService?: ConfigService;
   private configValidationService?: ConfigValidationService;
@@ -108,6 +111,8 @@ struct Index {
   private profileRefreshTick: number = 0;
   private loadedYamlProfileId: string = '';
   private sectionHistory: number[] = [];
+  private pageTransitionBusy: boolean = false;
+  private screenDiagonalInches: number = 0;
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
@@ -120,6 +125,7 @@ struct Index {
     this.subscriptionService = new SubscriptionService(filesDir);
     this.settingsService = new SettingsService(filesDir);
     this.agreementService = new AgreementService(filesDir);
+    this.updateScreenDiagonal();
     this.agreementAccepted = this.agreementService.hasAcceptedCurrent();
     this.agreementReady = true;
     this.bindRuntimeRefreshEvent(context);
@@ -532,15 +538,18 @@ struct Index {
       this.settingsSelector = '';
       return;
     }
+    if (this.pageTransitionBusy) {
+      return;
+    }
     if (this.isPrimarySection(index)) {
       this.sectionHistory = [];
     } else {
       this.sectionHistory.push(this.selectedSectionIndex);
     }
-    this.showSection(index);
+    this.transitionToSection(index);
   }
 
-  private showSection(index: number): void {
+  private applySection(index: number): void {
     if (index === 2 && this.configService) {
       this.editProfileId = '';
       const active = this.configService.getActiveProfile();
@@ -560,6 +569,66 @@ struct Index {
     }
   }
 
+  private updateScreenDiagonal(): void {
+    try {
+      const currentDisplay = display.getDefaultDisplaySync();
+      if (currentDisplay.xDPI > 0 && currentDisplay.yDPI > 0) {
+        const widthInches = currentDisplay.width / currentDisplay.xDPI;
+        const heightInches = currentDisplay.height / currentDisplay.yDPI;
+        this.screenDiagonalInches = Math.sqrt(widthInches * widthInches + heightInches * heightInches);
+      }
+    } catch (_err) {
+      this.screenDiagonalInches = 0;
+    }
+  }
+
+  private pageTransitionDuration(): number {
+    if (this.screenDiagonalInches > 12) {
+      return 320;
+    }
+    if (this.screenDiagonalInches >= 8.5) {
+      return 270;
+    }
+    if (this.screenDiagonalInches > 0) {
+      return 220;
+    }
+    return this.isTabletLayout() ? 270 : 220;
+  }
+
+  private transitionToSection(index: number): void {
+    if (index === this.selectedSectionIndex || this.pageTransitionBusy) {
+      return;
+    }
+    this.pageTransitionBusy = true;
+    const totalDuration = this.pageTransitionDuration();
+    const fadeOutDuration = Math.floor(totalDuration * 0.45);
+    const fadeInDuration = totalDuration - fadeOutDuration;
+    this.getUIContext().animateTo({
+      duration: fadeOutDuration,
+      curve: Curve.EaseInOut
+    }, () => {
+      this.pageTransitionOpacity = 0;
+    });
+    setTimeout(() => {
+      this.applySection(index);
+      this.pageTransitionScale = 0.985;
+      this.getUIContext().animateTo({
+        duration: fadeInDuration,
+        curve: Curve.EaseInOut
+      }, () => {
+        this.pageTransitionOpacity = 1;
+      });
+      this.getUIContext().animateTo({
+        curve: curves.responsiveSpringMotion()
+      }, () => {
+        this.pageTransitionScale = 1;
+      });
+      setTimeout(() => {
+        this.pageTransitionBusy = false;
+      }, fadeInDuration);
+    }, fadeOutDuration);
+  }
+
   private isPrimarySection(index: number): boolean {
     return index === 0 || index === 1 || index === 2 || index === 4 || index === 5;
   }
@@ -573,6 +642,9 @@ struct Index {
       this.closeProfileActions();
       return true;
     }
+    if (this.pageTransitionBusy) {
+      return true;
+    }
     if (this.selectedSectionIndex === 0) {
       return false;
     }
@@ -582,7 +654,7 @@ struct Index {
     } else {
       this.sectionHistory = [];
     }
-    this.showSection(target);
+    this.transitionToSection(target);
     return true;
   }
 
@@ -1204,11 +1276,21 @@ struct Index {
   private openProfileActions(profileId: string): void {
     this.settingsSelector = '';
     this.sheetProfileId = profileId;
-    this.sheetVisible = true;
+    this.getUIContext().animateTo({
+      duration: this.pageTransitionDuration(),
+      curve: Curve.EaseInOut
+    }, () => {
+      this.sheetVisible = true;
+    });
   }
 
   private closeProfileActions(): void {
-    this.sheetVisible = false;
+    this.getUIContext().animateTo({
+      duration: this.pageTransitionDuration(),
+      curve: Curve.EaseInOut
+    }, () => {
+      this.sheetVisible = false;
+    });
     this.sheetProfileId = '';
   }
 
@@ -1948,11 +2030,21 @@ struct Index {
 
   private openSettingsSelector(type: string): void {
     this.sheetVisible = false;
-    this.settingsSelector = type;
+    this.getUIContext().animateTo({
+      duration: this.pageTransitionDuration(),
+      curve: Curve.EaseInOut
+    }, () => {
+      this.settingsSelector = type;
+    });
   }
 
   private closeSettingsSelector(): void {
-    this.settingsSelector = '';
+    this.getUIContext().animateTo({
+      duration: this.pageTransitionDuration(),
+      curve: Curve.EaseInOut
+    }, () => {
+      this.settingsSelector = '';
+    });
   }
 
   private selectRouteMode(mode: VpnRouteMode): void {
@@ -2160,6 +2252,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
@@ -2538,6 +2631,7 @@ struct Index {
         }
         .scrollable(ScrollDirection.Horizontal)
         .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         .width('100%')
       }
     }
@@ -2672,6 +2766,7 @@ struct Index {
           }
           .scrollable(ScrollDirection.Horizontal)
           .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .width('100%')
           }
 
@@ -2736,6 +2831,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
@@ -2860,6 +2956,7 @@ struct Index {
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
 
         Scroll() {
           Column({ space: 14 }) {
@@ -2871,6 +2968,7 @@ struct Index {
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       }
       .layoutWeight(1)
       .backgroundColor(this.appBg())
@@ -2889,6 +2987,7 @@ struct Index {
       }
       .scrollable(ScrollDirection.Vertical)
       .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .layoutWeight(1)
       .width('100%')
       .backgroundColor(this.appBg())
@@ -3237,6 +3336,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
@@ -3285,6 +3385,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
@@ -3363,6 +3464,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .onWillScroll((_xOffset: number, _yOffset: number, _scrollState: ScrollState, source: ScrollSource) => {
       this.pauseLogFollowForUserScroll(source);
     })
@@ -3452,6 +3554,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
@@ -3662,6 +3765,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
@@ -3728,6 +3832,7 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .width('100%')
     .layoutWeight(1)
     .backgroundColor(this.appBg())
@@ -3825,12 +3930,13 @@ struct Index {
     }
     .scrollable(ScrollDirection.Vertical)
     .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
   }
 
-  @Builder AgreementConsentOverlay() {
+  @Builder AgreementConsentPage() {
     Column({ space: 14 }) {
       Column({ space: 5 }) {
         Text('用户服务协议')
@@ -3859,6 +3965,7 @@ struct Index {
       }
       .scrollable(ScrollDirection.Vertical)
       .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
       .layoutWeight(1)
       .width('100%')
 
@@ -3871,16 +3978,21 @@ struct Index {
 
       Row({ space: 10 }) {
         Button('不同意并退出')
+          .id('agreement-decline-button')
           .height(44)
           .layoutWeight(1)
           .fontSize(13)
           .fontColor(this.secondaryText())
           .backgroundColor(this.elevatedBg())
           .borderRadius(10)
+          .accessibilityText('不同意并退出')
+          .accessibilityDescription('拒绝用户服务协议并退出 ClashGuard')
+          .accessibilityLevel('yes')
           .onClick(() => {
             this.declineAgreement();
           })
         Button('同意并继续')
+          .id('agreement-accept-button')
           .height(44)
           .layoutWeight(1)
           .fontSize(13)
@@ -3888,6 +4000,9 @@ struct Index {
           .fontColor('#042F2E')
           .backgroundColor(this.accentColor())
           .borderRadius(10)
+          .accessibilityText('同意并继续')
+          .accessibilityDescription('接受用户服务协议并进入 ClashGuard')
+          .accessibilityLevel('yes')
           .onClick(() => {
             this.acceptAgreement();
           })
@@ -3898,7 +4013,6 @@ struct Index {
     .height('100%')
     .padding({ left: 20, right: 20, top: 24, bottom: 20 })
     .backgroundColor(this.appBg())
-    .zIndex(1000)
   }
 
   @Builder EmptyCard(title: string, subtitle: string) {
@@ -4024,11 +4138,19 @@ struct Index {
       .padding({ left: 20, right: 20, top: 18, bottom: 30 })
       .backgroundColor(this.surfaceBg())
       .borderRadius({ topLeft: 22, topRight: 22 })
+      .transition(TransitionEffect.translate({ y: 24 }).animation({
+        duration: this.pageTransitionDuration(),
+        curve: curves.responsiveSpringMotion()
+      }))
     }
     .width('100%')
     .height('100%')
     .alignItems(HorizontalAlign.Center)
     .backgroundColor('#99000000')
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: this.pageTransitionDuration(),
+      curve: Curve.EaseInOut
+    }))
   }
 
   @Builder SettingsModeOption(title: string, description: string, selected: boolean, action: () => void) {
@@ -4105,10 +4227,18 @@ struct Index {
       .padding({ left: 28, right: 28, top: 18, bottom: 30 })
       .backgroundColor(this.surfaceBg())
       .borderRadius({ topLeft: 22, topRight: 22 })
+      .transition(TransitionEffect.translate({ y: 24 }).animation({
+        duration: this.pageTransitionDuration(),
+        curve: curves.responsiveSpringMotion()
+      }))
     }
     .width('100%')
     .height('100%')
     .backgroundColor('#99000000')
+    .transition(TransitionEffect.OPACITY.animation({
+      duration: this.pageTransitionDuration(),
+      curve: Curve.EaseInOut
+    }))
   }
 
   @Builder SheetActionRow(title: string, color: string, action: () => void) {
@@ -4234,48 +4364,59 @@ struct Index {
       )
   }
 
+  @Builder TransitioningPageContent() {
+    Column() {
+      this.AppHeader()
+      this.PageShell()
+    }
+    .layoutWeight(1)
+    .height('100%')
+    .width('100%')
+    .opacity(this.pageTransitionOpacity)
+    .scale({ x: this.pageTransitionScale, y: this.pageTransitionScale })
+    .backgroundColor(this.appBg())
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (this.isTabletLayout()) {
-        Row() {
-          this.TabletSidebar()
-          Column() {
-            this.AppHeader()
-            this.PageShell()
+      if (!this.agreementReady) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor(this.appBg())
+      } else if (!this.agreementAccepted) {
+        this.AgreementConsentPage()
+      } else {
+        if (this.isTabletLayout()) {
+          Row() {
+            this.TabletSidebar()
+            this.TransitioningPageContent()
           }
           .height('100%')
-          .layoutWeight(1)
+          .width('100%')
+          .backgroundColor(this.appBg())
+        } else {
+          Column() {
+            this.TransitioningPageContent()
+            this.BottomNav()
+          }
+          .height('100%')
+          .width('100%')
           .backgroundColor(this.appBg())
         }
-        .height('100%')
-        .width('100%')
-        .backgroundColor(this.appBg())
-      } else {
-        Column() {
-          this.AppHeader()
-          this.PageShell()
-          this.BottomNav()
+
+        if (this.sheetVisible) {
+          this.ProfileActionSheet()
         }
-        .height('100%')
-        .width('100%')
-        .backgroundColor(this.appBg())
-      }
 
-      if (this.sheetVisible) {
-        this.ProfileActionSheet()
-      }
+        if (this.settingsSelector.length > 0) {
+          this.SettingsSelectionSheet()
+        }
 
-      if (this.settingsSelector.length > 0) {
-        this.SettingsSelectionSheet()
-      }
-
-      if (!this.isTabletLayout() &&
-        (this.selectedSectionIndex !== 0 || this.sheetVisible || this.settingsSelector.length > 0)) {
-        this.EdgeBackGestureArea()
-      }
-
-      if (this.agreementReady && !this.agreementAccepted) {
-        this.AgreementConsentOverlay()
+        if (!this.isTabletLayout() &&
+          (this.selectedSectionIndex !== 0 || this.sheetVisible || this.settingsSelector.length > 0)) {
+          this.EdgeBackGestureArea()
+        }
       }
     }
     .height('100%')
@@ -4285,7 +4426,7 @@ struct Index {
       this.rootWidth = Number(newArea.width);
     })
     .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, _currentRatio: number) => {
-      if (!isVisible) {
+      if (!isVisible || !this.agreementReady || !this.agreementAccepted) {
         return;
       }
       this.refreshRuntimeView(true);

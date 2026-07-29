@@ -48,6 +48,7 @@ interface MvpCommandParams extends Record<string, Object> {
 
 export default class EntryAbility extends UIAbility {
   private windowStage?: window.WindowStage;
+  private geoIpInitializationScheduled: boolean = false;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
@@ -55,7 +56,6 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
-    this.ensureBundledGeoIp();
     hilog.debug(DOMAIN, TAG, 'Ability onCreate want=%{public}s', this.wantToLogText(want));
     this.notifyUiRuntimeRefresh('onCreate');
     this.tryHandleMvpCommand(want, 'onCreate');
@@ -98,14 +98,20 @@ export default class EntryAbility extends UIAbility {
     hilog.debug(DOMAIN, TAG, '%{public}s', 'Ability onBackground');
   }
 
-  private ensureBundledGeoIp(): void {
-    try {
-      const result = BundledGeoIpService.ensureInstalled(this.context.filesDir, this.context.resourceManager);
-      hilog.debug(DOMAIN, TAG, 'GeoIP database %{public}s bytes=%{public}d',
-        result.copied ? 'restored from bundle' : 'cache ready', result.bytes);
-    } catch (err) {
-      hilog.error(DOMAIN, TAG, 'GeoIP database initialization failed: %{public}s', this.toErrorText(err));
+  private scheduleBundledGeoIpInitialization(source: string): void {
+    if (this.geoIpInitializationScheduled) {
+      return;
     }
+    this.geoIpInitializationScheduled = true;
+    setTimeout(() => {
+      BundledGeoIpService.ensureInstalled(this.context.filesDir, this.context.resourceManager).then((result) => {
+        hilog.debug(DOMAIN, TAG, 'GeoIP database %{public}s bytes=%{public}d',
+          result.copied ? 'restored from bundle' : 'cache ready', result.bytes);
+      }).catch((err: Object) => {
+        hilog.error(DOMAIN, TAG, 'GeoIP database initialization failed source=%{public}s err=%{public}s',
+          source, this.toErrorText(err));
+      });
+    }, 500);
   }
 
   private notifyUiRuntimeRefresh(source: string): void {
@@ -131,6 +137,7 @@ export default class EntryAbility extends UIAbility {
       }
       hilog.debug(DOMAIN, TAG, 'Succeeded loading content source=%{public}s', source);
       this.notifyUiRuntimeRefresh('loadContent:' + source);
+      this.scheduleBundledGeoIpInitialization(source);
     });
   }
 
