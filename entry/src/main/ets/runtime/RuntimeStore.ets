@@ -131,7 +131,7 @@ export class RuntimeStore {
     const resolvedSnapshot = snapshot ?? this.getSnapshot();
     const resolvedEvents = events ?? this.getRuntimeEvents();
     const lines: string[] = [];
-    lines.push('ClashGuard Diagnostics');
+    lines.push('FluxGate Diagnostics');
     lines.push('generatedAt=' + new Date().toISOString());
     lines.push('');
     lines.push('[snapshot]');

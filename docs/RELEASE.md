@@ -6,7 +6,7 @@ Signing credentials previously committed to repository history must be treated a
 
 ## Signing
 
-Before installing a build on a physical device or publishing it, configure a HarmonyOS signing profile for `com.fly.clashguard` in DevEco Studio or inject an equivalent signing configuration in CI. Never commit the generated credentials or machine paths.
+Before installing a build on a physical device or publishing it, configure a HarmonyOS signing profile for `com.fly.fluxgate` in DevEco Studio or inject an equivalent signing configuration in CI. Never commit the generated credentials or machine paths.
 
 An AppGallery Release Provision Profile is accepted only through AppGallery distribution. The resulting HAP cannot be installed directly with `hdc`; exact-artifact device verification must use an AppGallery internal-test release.
 

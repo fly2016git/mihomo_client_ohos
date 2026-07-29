@@ -9,7 +9,7 @@ RUN_M2_3="${RELEASE_GATE_M2_3:-false}"
 STABILITY_CYCLES="${RELEASE_GATE_STABILITY_CYCLES:-5}"
 BUILD_RELEASE="${RELEASE_GATE_BUILD_RELEASE:-true}"
 
-echo "== ClashGuard release gate =="
+echo "== FluxGate release gate =="
 echo "device checks: $RUN_DEVICE"
 
 echo "== shell syntax =="
@@ -63,4 +63,4 @@ if [ "$BUILD_RELEASE" = "true" ]; then
   fi
 fi
 
-echo "ClashGuard release gate PASS"
+echo "FluxGate release gate PASS"

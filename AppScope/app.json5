@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "com.fly.clashguard",
+    "bundleName": "com.fly.fluxgate",
     "vendor": "fly2016",
     "versionCode": 1000001,
     "versionName": "1.0.1",

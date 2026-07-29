@@ -29,7 +29,6 @@ import {
 } from '../models/MvpTypes';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { TrafficStatsService } from '../runtime/TrafficStatsService';
-import { AgreementService, CURRENT_AGREEMENT_VERSION } from '../settings/AgreementService';
 import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { UiRefreshBus } from '../runtime/UiRefreshBus';
@@ -37,6 +36,7 @@ import { VpnControlService } from '../runtime/VpnControlService';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoMvpPage';
+const CURRENT_AGREEMENT_VERSION = '2026-07-29';
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 const IMPORT_READ_CHUNK_BYTES = 64 * 1024;
 
@@ -89,9 +89,6 @@ struct Index {
   @State diagnosticText: string = '';
   @State lastDiagnosticPath: string = '';
   @State renderTick: number = 0;
-  @State agreementReady: boolean = false;
-  @State agreementAccepted: boolean = false;
-  @State agreementError: string = '';
   @State pageTransitionOpacity: number = 1;
   @State pageTransitionScale: number = 1;
 
@@ -101,7 +98,7 @@ struct Index {
   private vpnControlService?: VpnControlService;
   private subscriptionService?: SubscriptionService;
   private settingsService?: SettingsService;
-  private agreementService?: AgreementService;
+  private trafficStatsService?: TrafficStatsService;
   private uiContext?: common.UIAbilityContext;
   private runtimeRefreshHandler?: () => void;
   private runtimeRefreshBusHandler?: (timestamp: number) => void;
@@ -124,10 +121,8 @@ struct Index {
     this.vpnControlService = new VpnControlService(filesDir, context);
     this.subscriptionService = new SubscriptionService(filesDir);
     this.settingsService = new SettingsService(filesDir);
-    this.agreementService = new AgreementService(filesDir);
+    this.trafficStatsService = new TrafficStatsService(filesDir);
     this.updateScreenDiagonal();
-    this.agreementAccepted = this.agreementService.hasAcceptedCurrent();
-    this.agreementReady = true;
     this.bindRuntimeRefreshEvent(context);
     this.bindRuntimeRefreshBus();
     const profile = this.configService.getActiveProfile();
@@ -165,33 +160,7 @@ struct Index {
   }
 
   onBackPress(): boolean {
-    if (this.agreementReady && !this.agreementAccepted) {
-      return true;
-    }
     return this.navigateBack();
-  }
-
-  private acceptAgreement(): void {
-    if (!this.agreementService) {
-      this.agreementError = '无法保存协议状态，请重新启动应用后重试';
-      return;
-    }
-    try {
-      this.agreementService.acceptCurrent();
-      this.agreementAccepted = true;
-      this.agreementError = '';
-    } catch (err) {
-      this.agreementError = '保存失败：' + this.toErrorText(err);
-    }
-  }
-
-  private declineAgreement(): void {
-    if (!this.uiContext) {
-      return;
-    }
-    this.uiContext.terminateSelf().catch((err: Object) => {
-      this.agreementError = '退出失败：' + this.toErrorText(err);
-    });
   }
 
   onRuntimeRefreshSignalChanged(): void {
@@ -242,7 +211,7 @@ struct Index {
       return;
     }
     this.pollTimer = setInterval(() => {
-      this.refreshState(false);
+      this.refreshRuntimeView(false);
     }, 1000);
   }
 
@@ -255,7 +224,22 @@ struct Index {
 
   private refreshRuntimeView(forceProfiles: boolean = false): void {
     this.refreshState(forceProfiles);
+    this.refreshLiveTraffic();
     this.renderTick = (this.renderTick + 1) % 1000000;
+  }
+
+  private refreshLiveTraffic(): void {
+    if (!this.trafficStatsService || this.statusText !== 'Connected') {
+      return;
+    }
+    try {
+      const live = this.trafficStatsService.readLiveSnapshot();
+      this.uploadSpeed = live.uploadSpeed;
+      this.downloadSpeed = live.downloadSpeed;
+      this.trafficSource = 'native-mihomo';
+    } catch (_) {
+      // The runtime snapshot remains the fallback while the native writer starts or stops.
+    }
   }
 
   private reloadProfiles(): void {
@@ -2018,11 +2002,11 @@ struct Index {
   }
 
   private refreshDailyTraffic(): void {
-    if (!this.uiContext) {
+    if (!this.trafficStatsService) {
       return;
     }
     try {
-      new TrafficStatsService(this.uiContext.filesDir).refreshDailySnapshot();
+      this.trafficStatsService.refreshDailySnapshot();
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'daily traffic refresh failed: %{public}s', this.toErrorText(err));
     }
@@ -2151,7 +2135,7 @@ struct Index {
   @Builder AppHeader() {
     Row({ space: 12 }) {
       Column() {
-        Text('CG')
+        Text('FG')
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.accentColor())
@@ -2164,7 +2148,7 @@ struct Index {
       .borderRadius(10)
 
       Column({ space: 2 }) {
-        Text(this.selectedSectionIndex === 0 ? 'ClashGuard' : this.currentSectionLabel())
+        Text(this.selectedSectionIndex === 0 ? 'FluxGate' : this.currentSectionLabel())
           .fontSize(19)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.primaryText())
@@ -3169,7 +3153,7 @@ struct Index {
       }
       .width('100%')
 
-      TextArea({ text: this.rawYaml, placeholder: 'Clash/mihomo YAML' })
+      TextArea({ text: this.rawYaml, placeholder: 'mihomo YAML' })
         .height(this.isTabletLayout() ? 420 : 260)
         .width('100%')
         .fontSize(13)
@@ -3537,7 +3521,7 @@ struct Index {
         this.SettingsActionRow('帮助', '配置、连接与诊断说明', '查看', () => {
           this.selectSection(6);
         })
-        this.SettingsActionRow('ClashGuard', 'v1.0.1', '关于', () => {
+        this.SettingsActionRow('FluxGate', 'v1.0.1', '关于', () => {
           this.selectSection(7);
         })
         this.SettingsGroup('存储')
@@ -3799,7 +3783,7 @@ struct Index {
 
   @Builder HelpPage() {
     Column({ space: 12 }) {
-      this.DiagCard('帮助', '配置页用于管理 Clash/mihomo YAML 或 URL 订阅。', '连接后首页会展示状态、节点和运行事件。')
+      this.DiagCard('帮助', '配置页用于管理 mihomo YAML 或 URL 订阅。', '连接后首页会展示状态、节点和运行事件。')
       this.DiagCard('VPN 路由', '全量接管(推荐)：接管全部 IPv4 流量。',
         '分段默认路由适用于兼容性场景；其他路由模式主要用于诊断。“阻塞”指 TUN 读写方式。')
       this.DiagCard('启动模式', '规则(推荐)：按配置规则选择代理或直连。',
@@ -3815,14 +3799,14 @@ struct Index {
   @Builder AboutPage() {
     Scroll() {
       Column({ space: 12 }) {
-        this.DiagCard('ClashGuard', '版本 1.0.1', '基于 mihomo 的 HarmonyOS VPN 客户端')
+        this.DiagCard('FluxGate', '版本 1.0.1', '基于 mihomo 的 HarmonyOS VPN 客户端')
         this.DiagCard('隐私政策', '应用不收集账号、设备标识或使用统计。',
           '订阅地址仅用于用户主动更新；诊断文件仅在用户主动操作时生成。')
         this.SettingsActionRow('用户服务协议', '版本 ' + CURRENT_AGREEMENT_VERSION, '查看', () => {
           this.selectSection(10);
         })
-        this.DiagCard('开源许可', 'ClashGuard：GNU AGPL v3', 'mihomo 核心：GNU GPL v3')
-        this.DiagCard('版权与担保', '© 2026 ClashGuard contributors', '本软件按“原样”提供，不附带任何担保。')
+        this.DiagCard('开源许可', 'FluxGate：GNU AGPL v3', 'mihomo 核心：GNU GPL v3')
+        this.DiagCard('版权与担保', '© 2026 FluxGate contributors', '本软件按“原样”提供，不附带任何担保。')
         this.DiagCard('源代码', 'github.com/fly2016git/mihomo_client_ohos',
           '完整隐私政策：仓库根目录 PRIVACY.md')
       }
@@ -3858,13 +3842,13 @@ struct Index {
   @Builder AgreementContent() {
     Column({ space: 16 }) {
       this.AgreementSection('1. 关于我们',
-        '感谢您选择使用 ClashGuard。\n\nClashGuard 是由张鹏飞（以下简称“我们”）提供和维护的 HarmonyOS 网络代理配置管理工具。' +
-          '\n\n本协议是您与我们之间关于下载、安装、访问和使用 ClashGuard 软件及相关功能所订立的协议。' +
-          '\n\nClashGuard 仅提供网络代理配置管理和 VPN 技术功能，不提供代理节点、订阅内容、互联网接入或其他网络运营服务。')
+        '感谢您选择使用 FluxGate。\n\nFluxGate 是由张鹏飞（以下简称“我们”）提供和维护的 HarmonyOS 网络代理配置管理工具。' +
+          '\n\n本协议是您与我们之间关于下载、安装、访问和使用 FluxGate 软件及相关功能所订立的协议。' +
+          '\n\nFluxGate 仅提供网络代理配置管理和 VPN 技术功能，不提供代理节点、订阅内容、互联网接入或其他网络运营服务。')
       this.AgreementSection('2. 协议范围、目的及确认方式',
-        '本协议、《ClashGuard 隐私政策》、应用内操作提示以及针对特定功能展示的规则，共同构成您使用 ClashGuard 的完整约定。' +
+        '本协议、《FluxGate 隐私政策》、应用内操作提示以及针对特定功能展示的规则，共同构成您使用 FluxGate 的完整约定。' +
           '\n\n请您仔细阅读本协议全部内容，特别是有关责任限制、用户义务、禁止行为和争议解决的条款。' +
-          '\n\n首次使用时，您需要阅读并同意本协议后才能继续使用主要功能。点击“同意并继续”或实际使用 ClashGuard，即表示您已经阅读、理解并同意接受本协议约束。' +
+          '\n\n请您在使用 FluxGate 前阅读并理解本协议。您实际使用 FluxGate，即表示您同意接受本协议约束。' +
           '\n\n如果您不同意本协议的任何内容，或无法准确理解相关条款，请停止使用并卸载本应用。')
       this.AgreementSection('3. 使用本服务的要求',
         '3.1 您应当具备与使用本应用相适应的民事行为能力。若您属于无民事行为能力人或限制民事行为能力人，应当在监护人指导下阅读本协议，并在取得监护人同意后使用本应用。' +
@@ -3872,34 +3856,34 @@ struct Index {
           '\n\n3.3 您应当遵守所在国家或地区适用的法律法规、电信管理规定、网络服务规则及代理服务提供方的使用条款。如果您所在地区禁止或限制使用本应用相关功能，您应当立即停止使用。' +
           '\n\n3.4 您需要使用兼容的 HarmonyOS 设备，并自行承担设备、网络、流量和第三方服务产生的费用。')
       this.AgreementSection('4. 服务内容',
-        'ClashGuard 提供配置创建、导入、编辑、删除和切换，HTTP/HTTPS 订阅更新，系统 VPN 连接，代理节点查看和切换，路由与 DNS 设置，连接状态、流量、日志和诊断信息查看，文件导入、二维码识别以及本地 GeoIP 数据等功能。' +
+        'FluxGate 提供配置创建、导入、编辑、删除和切换，HTTP/HTTPS 订阅更新，系统 VPN 连接，代理节点查看和切换，路由与 DNS 设置，连接状态、流量、日志和诊断信息查看，文件导入、二维码识别以及本地 GeoIP 数据等功能。' +
           '\n\n我们不提供、销售或推荐任何代理节点、订阅服务或网络内容，也不保证用户自行添加的配置、节点或订阅服务真实、合法、安全、稳定或持续可用。' +
           '\n\n我们可能根据应用维护、安全或法律要求调整部分功能，并通过应用更新、发布页面或源代码仓库进行说明。')
       this.AgreementSection('5. 用户使用规则',
         '5.1 您应当自行确认代理配置、订阅地址、节点服务及相关认证信息的来源合法，并已获得必要的使用授权。' +
           '\n\n5.2 配置文件和订阅内容可能包含服务器地址、访问令牌、密码或其他敏感信息，您应妥善保管。' +
           '\n\n5.3 您应仔细核对配置、路由模式、DNS 设置和代理节点。因配置错误、节点故障、操作不当或选择错误造成的后果，由您自行承担。' +
-          '\n\n5.4 ClashGuard 不要求注册账号，您在本地设备上的配置、设置和操作均视为由设备实际使用者作出。' +
+          '\n\n5.4 FluxGate 不要求注册账号，您在本地设备上的配置、设置和操作均视为由设备实际使用者作出。' +
           '\n\n5.5 您不得对本应用实施恶意攻击、漏洞利用、干扰运行或破坏安全机制，但开源许可证明确允许的行为除外。' +
           '\n\n5.6 您使用本应用处理第三方数据或网络流量时，应确保已取得必要授权，并遵守相关法律规定。')
       this.AgreementSection('6. 免责声明及责任限制',
-        '6.1 ClashGuard 按照“现状”和“可用”状态提供。我们会合理维护应用，但不保证应用不会出现错误、中断、延迟或与所有设备、配置及第三方服务完全兼容。' +
+        '6.1 FluxGate 按照“现状”和“可用”状态提供。我们会合理维护应用，但不保证应用不会出现错误、中断、延迟或与所有设备、配置及第三方服务完全兼容。' +
           '\n\n6.2 对于用户配置或操作错误、第三方服务故障、网络运营商限制、系统升级、设备故障、恶意配置、网络攻击、不可抗力及其他无法控制或合理预见的情况造成的损失，在法律允许的范围内，我们不承担责任。' +
-          '\n\n6.3 ClashGuard 仅负责按照用户配置建立 VPN 和转发网络流量，不对第三方代理服务的安全性、隐私保护、服务质量、可用性及合法性作任何保证。' +
+          '\n\n6.3 FluxGate 仅负责按照用户配置建立 VPN 和转发网络流量，不对第三方代理服务的安全性、隐私保护、服务质量、可用性及合法性作任何保证。' +
           '\n\n6.4 您通过第三方代理服务器发送的数据可能被相应服务提供方处理。请勿通过不可信的配置或节点传输敏感数据。' +
           '\n\n6.5 在法律允许的范围内，我们不对间接损失、预期利益损失、业务中断、数据丢失或第三方索赔承担责任。法律另有强制性规定的，从其规定。')
       this.AgreementSection('7. 用户禁止性规定',
-        '您不得利用 ClashGuard 从事违法违规或侵害他人合法权益的活动，包括危害国家或公共安全，非法侵入、攻击或破坏信息系统，制作或传播恶意程序，非法处理个人信息，侵犯知识产权、商业秘密或隐私，传播违法有害内容，绕过依法实施的安全措施，未经授权进行网络扫描、压力测试或流量攻击，以及诈骗、洗钱、赌博等行为。' +
+        '您不得利用 FluxGate 从事违法违规或侵害他人合法权益的活动，包括危害国家或公共安全，非法侵入、攻击或破坏信息系统，制作或传播恶意程序，非法处理个人信息，侵犯知识产权、商业秘密或隐私，传播违法有害内容，绕过依法实施的安全措施，未经授权进行网络扫描、压力测试或流量攻击，以及诈骗、洗钱、赌博等行为。' +
           '\n\n如您违反本条约定，由此造成的责任和损失由您自行承担；如给我们或第三方造成损失，您还应依法承担赔偿责任。')
       this.AgreementSection('8. 知识产权、开源许可及协议修订',
-        '8.1 ClashGuard 的源代码及部分组件依据相应开源许可证提供。使用、复制、修改或分发相关代码时，应遵守 AGPL-3.0、GPL-3.0 及其他第三方开源许可证要求。' +
-          '\n\n8.2 ClashGuard 名称、图标、界面设计及其他未明确按照开源许可证授权的内容，其合法权益归相应权利人所有。' +
+        '8.1 FluxGate 的源代码及部分组件依据相应开源许可证提供。使用、复制、修改或分发相关代码时，应遵守 AGPL-3.0、GPL-3.0 及其他第三方开源许可证要求。' +
+          '\n\n8.2 FluxGate 名称、图标、界面设计及其他未明确按照开源许可证授权的内容，其合法权益归相应权利人所有。' +
           '\n\n8.3 我们可能根据功能、安全或法律法规变化修订本协议。重大变更将采用合理方式提示您重新阅读和确认。' +
           '\n\n如果您不同意修订后的协议，应停止使用本应用；您在协议生效后继续使用，即视为接受修订后的协议。')
       this.AgreementSection('9. 适用法律及争议解决',
         '本协议的订立、效力、履行、解释及争议解决适用中华人民共和国大陆地区法律，但法律另有强制性规定的除外。' +
           '\n\n本协议签订地为中华人民共和国北京市大兴区。' +
-          '\n\n因本协议或使用 ClashGuard 产生争议的，双方应首先友好协商；协商不成的，任何一方可依法向协议签订地有管辖权的人民法院提起诉讼。法律另有强制性规定的，从其规定。')
+          '\n\n因本协议或使用 FluxGate 产生争议的，双方应首先友好协商；协商不成的，任何一方可依法向协议签订地有管辖权的人民法院提起诉讼。法律另有强制性规定的，从其规定。')
       this.AgreementSection('10. 联系我们',
         '开发者或运营者：张鹏飞\n联系邮箱：fly2015_zhang@163.com' +
           '\n项目地址：https://github.com/fly2016git/mihomo_client_ohos' +
@@ -3933,85 +3917,6 @@ struct Index {
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .layoutWeight(1)
     .width('100%')
-    .backgroundColor(this.appBg())
-  }
-
-  @Builder AgreementConsentPage() {
-    Column({ space: 14 }) {
-      Column({ space: 5 }) {
-        Text('用户服务协议')
-          .fontSize(21)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.primaryText())
-          .width('100%')
-        Text('请阅读后选择是否继续使用 ClashGuard')
-          .fontSize(12)
-          .fontColor(this.secondaryText())
-          .width('100%')
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Start)
-
-      Scroll() {
-        Column({ space: 14 }) {
-          this.AgreementContent()
-          Text('协议版本：' + CURRENT_AGREEMENT_VERSION)
-            .fontSize(11)
-            .fontColor(this.mutedText())
-            .width('100%')
-        }
-        .width('100%')
-        .padding({ top: 6, bottom: 8 })
-      }
-      .scrollable(ScrollDirection.Vertical)
-      .scrollBar(BarState.Auto)
-      .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-      .layoutWeight(1)
-      .width('100%')
-
-      if (this.agreementError.length > 0) {
-        Text(this.agreementError)
-          .fontSize(11)
-          .fontColor(this.dangerColor())
-          .width('100%')
-      }
-
-      Row({ space: 10 }) {
-        Button('不同意并退出')
-          .id('agreement-decline-button')
-          .height(44)
-          .layoutWeight(1)
-          .fontSize(13)
-          .fontColor(this.secondaryText())
-          .backgroundColor(this.elevatedBg())
-          .borderRadius(10)
-          .accessibilityText('不同意并退出')
-          .accessibilityDescription('拒绝用户服务协议并退出 ClashGuard')
-          .accessibilityLevel('yes')
-          .onClick(() => {
-            this.declineAgreement();
-          })
-        Button('同意并继续')
-          .id('agreement-accept-button')
-          .height(44)
-          .layoutWeight(1)
-          .fontSize(13)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#042F2E')
-          .backgroundColor(this.accentColor())
-          .borderRadius(10)
-          .accessibilityText('同意并继续')
-          .accessibilityDescription('接受用户服务协议并进入 ClashGuard')
-          .accessibilityLevel('yes')
-          .onClick(() => {
-            this.acceptAgreement();
-          })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .height('100%')
-    .padding({ left: 20, right: 20, top: 24, bottom: 20 })
     .backgroundColor(this.appBg())
   }
 
@@ -4271,7 +4176,7 @@ struct Index {
 
   @Builder TabletSidebar() {
     Column({ space: 8 }) {
-      Text('CG')
+      Text('FG')
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(this.accentColor())
@@ -4379,44 +4284,35 @@ struct Index {
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (!this.agreementReady) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor(this.appBg())
-      } else if (!this.agreementAccepted) {
-        this.AgreementConsentPage()
+      if (this.isTabletLayout()) {
+        Row() {
+          this.TabletSidebar()
+          this.TransitioningPageContent()
+        }
+        .height('100%')
+        .width('100%')
+        .backgroundColor(this.appBg())
       } else {
-        if (this.isTabletLayout()) {
-          Row() {
-            this.TabletSidebar()
-            this.TransitioningPageContent()
-          }
-          .height('100%')
-          .width('100%')
-          .backgroundColor(this.appBg())
-        } else {
-          Column() {
-            this.TransitioningPageContent()
-            this.BottomNav()
-          }
-          .height('100%')
-          .width('100%')
-          .backgroundColor(this.appBg())
+        Column() {
+          this.TransitioningPageContent()
+          this.BottomNav()
         }
+        .height('100%')
+        .width('100%')
+        .backgroundColor(this.appBg())
+      }
 
-        if (this.sheetVisible) {
-          this.ProfileActionSheet()
-        }
+      if (this.sheetVisible) {
+        this.ProfileActionSheet()
+      }
 
-        if (this.settingsSelector.length > 0) {
-          this.SettingsSelectionSheet()
-        }
+      if (this.settingsSelector.length > 0) {
+        this.SettingsSelectionSheet()
+      }
 
-        if (!this.isTabletLayout() &&
-          (this.selectedSectionIndex !== 0 || this.sheetVisible || this.settingsSelector.length > 0)) {
-          this.EdgeBackGestureArea()
-        }
+      if (!this.isTabletLayout() &&
+        (this.selectedSectionIndex !== 0 || this.sheetVisible || this.settingsSelector.length > 0)) {
+        this.EdgeBackGestureArea()
       }
     }
     .height('100%')
@@ -4426,7 +4322,7 @@ struct Index {
       this.rootWidth = Number(newArea.width);
     })
     .onVisibleAreaChange([0.0, 1.0], (isVisible: boolean, _currentRatio: number) => {
-      if (!isVisible || !this.agreementReady || !this.agreementAccepted) {
+      if (!isVisible) {
         return;
       }
       this.refreshRuntimeView(true);

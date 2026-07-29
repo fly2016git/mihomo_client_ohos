@@ -2,7 +2,7 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "ClashGuard VPN 客户端"
+      "value": "FluxGate VPN 客户端"
     },
     {
       "name": "EntryAbility_desc",
@@ -10,11 +10,11 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "ClashGuard"
+      "value": "FluxGate"
     },
     {
       "name": "vpn_extension_label",
-      "value": "ClashGuard VPN"
+      "value": "FluxGate VPN"
     },
     {
       "name": "vpn_extension_desc",

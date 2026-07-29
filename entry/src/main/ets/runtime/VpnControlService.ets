@@ -6,7 +6,7 @@ import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { RuntimeStore } from './RuntimeStore';
 
-const BUNDLE_NAME = 'com.fly.clashguard';
+const BUNDLE_NAME = 'com.fly.fluxgate';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 
 export class VpnControlService {

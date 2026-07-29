@@ -6,7 +6,7 @@ import { DEFAULT_APP_SETTINGS, makeSubscriptionMeta } from '../../../main/ets/mo
 import { SubscriptionUrlPolicy } from '../../../main/ets/subscription/SubscriptionUrlPolicy';
 
 export default function abilityTest() {
-  describe('ClashGuard device policy tests', () => {
+  describe('FluxGate device policy tests', () => {
     it('uses the recommended defaults', 0, () => {
       expect(DEFAULT_APP_SETTINGS.routeMode).assertEqual('blocking-default');
       expect(DEFAULT_APP_SETTINGS.proxyMode).assertEqual('rule');

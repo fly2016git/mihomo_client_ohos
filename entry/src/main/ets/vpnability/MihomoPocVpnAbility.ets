@@ -12,7 +12,7 @@ import pocNative, { PocStatus } from '../native/PocNative';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoPocVpn';
-const BUNDLE_NAME = 'com.fly.clashguard';
+const BUNDLE_NAME = 'com.fly.fluxgate';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 const TUN_EAGAIN_POLL_MS = 50;
 const GRACEFUL_STOP_TIMEOUT_MS = 3000;

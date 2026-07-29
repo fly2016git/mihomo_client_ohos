@@ -3,7 +3,7 @@ import { DEFAULT_APP_SETTINGS, makeSubscriptionMeta } from '../main/ets/models/M
 import { SubscriptionUrlPolicy } from '../main/ets/subscription/SubscriptionUrlPolicy';
 
 export default function localUnitTest() {
-  describe('ClashGuard model and policy tests', () => {
+  describe('FluxGate model and policy tests', () => {
     it('uses production-safe default settings', 0, () => {
       expect(DEFAULT_APP_SETTINGS.routeMode).assertEqual('blocking-default');
       expect(DEFAULT_APP_SETTINGS.proxyMode).assertEqual('rule');

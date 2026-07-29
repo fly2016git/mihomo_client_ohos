@@ -1079,7 +1079,7 @@ MVP-01 不强制改名，避免破坏 POC 回归。
 - 真机 smoke 日志已验证 `product tunFd created fd=` 后调用 `MVP-01B calling MihomoOhosStartConfigFileWithTunFd ... tunFd=`，并返回 `code=0`。
 - Go bridge 已在内存中把产品 runtime YAML 注入为 fd-backed TUN 配置：`tun.enable=true`、`tun.file-descriptor=<tunFd>`、`tun.stack=gvisor`、`tun.auto-route=false`、`tun.auto-detect-interface=false`、`tun.inet4-address=10.7.0.2/24`、`tun.mtu=1500`。
 - 2026-06-09 第二轮已把 `tun.dns-hijack` 从 `0.0.0.0:53` 改为 mihomo 规范语法 `any:53`，并在 `injectTunFd` 中自动补全 DNS 块（`listen: 0.0.0.0:53`、`enhanced-mode: fake-ip`、`fake-ip-range: 198.18.0.0/15`、`nameserver/default-nameserver` 默认值）。
-- 产品 VPN config 已调整为 `10.7.0.2/24`，并用 `blockedApplications=['com.fly.clashguard']` 避免控制 App 自身回环进入 VPN。
+- 产品 VPN config 已调整为 `10.7.0.2/24`，并用 `blockedApplications=['com.fly.fluxgate']` 避免控制 App 自身回环进入 VPN。
 - 路由模式已扩展为 7 种：`split-default`（默认）、`default`、`blocking-empty`、`blocking-split`、`blocking-default`、`no-routes`、`exclude-local`，可通过 `--ps vpnRouteMode <mode>` 切换；`parseProductVpnOptions` 之前的白名单 bug（把非 `default` 的所有模式强制改回 `split-default`）已修复。
 - 2026-06-09 真机路由诊断结论：上述路由组合创建 VPN 后，设备 `netstat -rn` 均只显示 `10.7.0.0/24 -> vpn-tun`，未出现默认路由；但 `vpn-tun` TX > 0（DNS 包确实进入 TUN）、RX = 0（mihomo 未回复）。
 - 第二轮定位到 RX = 0 的**根因**：`enableProtectHookLocked()` 被硬编码为禁用（`protectOn = false; DefaultSocketHook = nil`），导致 mihomo 出站 DNS 没有 protect → 流量回环 → mihomo 无法解析 → 无法回复 fake-ip → 浏览器报 `dnsServerReturnNothing`。已修复：`enableProtectHookLocked()` 现在真正激活 `dialer.DefaultSocketHook = mihomoProtectSocketHook`，并在 `startWithConfig` fd-backed TUN 路径上自动启用。

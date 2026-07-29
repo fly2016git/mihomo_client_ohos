@@ -36,10 +36,10 @@ run_hdc shell aa force-stop "$POC_BUNDLE_NAME" >/dev/null 2>&1 || true
 run_hdc shell hilog -r >/dev/null
 run_hdc shell aa start -b "$POC_BUNDLE_NAME" -a "$POC_ENTRY_ABILITY" >/dev/null
 sleep 3
-run_hdc shell hilog -x > /private/tmp/clashguard-release-launch-hilog.txt
+run_hdc shell hilog -x > /private/tmp/fluxgate-release-launch-hilog.txt
 
 if grep -E 'DfxFaultLogger|Ability on scheduler died|On ability died|Fatal signal|Signal:SIG' \
-  /private/tmp/clashguard-release-launch-hilog.txt >/dev/null; then
+  /private/tmp/fluxgate-release-launch-hilog.txt >/dev/null; then
   echo 'crash signal detected after launching the release HAP' >&2
   exit 1
 fi

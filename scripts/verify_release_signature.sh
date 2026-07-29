@@ -6,7 +6,7 @@ source "$ROOT_DIR/scripts/huawei_tools_env.sh"
 
 HAP_PATH="${1:-$ROOT_DIR/entry/build/default/outputs/default/entry-default-signed.hap}"
 SIGN_TOOL="${HAP_SIGN_TOOL:-$DEVECO_STUDIO_APP/Contents/sdk/default/openharmony/toolchains/lib/hap-sign-tool.jar}"
-VERIFY_TMP_DIR="$(mktemp -d "${TMPDIR:-/private/tmp}/clashguard-signature.XXXXXX")"
+VERIFY_TMP_DIR="$(mktemp -d "${TMPDIR:-/private/tmp}/fluxgate-signature.XXXXXX")"
 
 cleanup() {
   rm -f "$VERIFY_TMP_DIR/cert-chain.cer" "$VERIFY_TMP_DIR/profile.p7b"

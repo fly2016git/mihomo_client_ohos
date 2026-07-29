@@ -25,12 +25,14 @@ assert_manifest() {
 
 assert_manifest '.app.debug == false and .app.buildMode == "release"' \
   'release HAP is marked as debug'
-assert_manifest '.app.bundleName == "com.fly.clashguard"' \
+assert_manifest '.app.bundleName == "com.fly.fluxgate"' \
   'release HAP has an unexpected bundle name'
 assert_manifest '.app.vendor == "fly2016"' \
   'release HAP has an unexpected vendor'
 assert_manifest '.app.versionName == "1.0.1" and .app.versionCode == 1000001' \
   'release HAP has an unexpected version'
+assert_manifest '.app.targetAPIVersion == 60101024 and .app.minAPIVersion == 50000012' \
+  'release HAP has an unexpected target or minimum API version'
 assert_manifest '.module.abilities[] | select(.name == "EntryAbility") | .exported == true' \
   'release HAP launcher ability is not exported'
 assert_manifest '.module.extensionAbilities[] | select(.name == "MihomoPocVpnAbility") | .exported == false' \

@@ -11,7 +11,7 @@ import { SubscriptionService } from '../subscription/SubscriptionService';
 
 const DOMAIN = 0x0000;
 const TAG = 'MihomoPocEntry';
-const BUNDLE_NAME = 'com.fly.clashguard';
+const BUNDLE_NAME = 'com.fly.fluxgate';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 const MVP_DEFAULT_CONFIG =
   'mode: direct\n' +

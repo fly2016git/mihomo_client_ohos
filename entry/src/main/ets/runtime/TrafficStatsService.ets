@@ -22,11 +22,22 @@ interface DailyTrafficState {
   updatedAt: number;
 }
 
+export interface LiveTrafficSnapshot {
+  uploadSpeed: number;
+  downloadSpeed: number;
+  source: string;
+  updatedAt: number;
+}
+
 export class TrafficStatsService {
   private configService: ConfigService;
   private runtimeStore: RuntimeStore;
   private lastUploadTotal: number = -1;
   private lastDownloadTotal: number = -1;
+  private lastSampleUpdatedAt: number = 0;
+  private lastLiveUploadTotal: number = -1;
+  private lastLiveDownloadTotal: number = -1;
+  private lastLiveUpdatedAt: number = 0;
 
   constructor(filesDir: string) {
     this.configService = new ConfigService(filesDir);
@@ -38,6 +49,7 @@ export class TrafficStatsService {
     const now = Date.now();
     this.lastUploadTotal = stats.upTotal;
     this.lastDownloadTotal = stats.downTotal;
+    this.lastSampleUpdatedAt = stats.updatedAt;
     const daily = this.loadDailyState(now);
     this.runtimeStore.update({
       uploadSpeed: 0,
@@ -46,6 +58,28 @@ export class TrafficStatsService {
       todayDownloadBytes: daily.downloadBytes,
       trafficSource: 'native-mihomo'
     });
+  }
+
+  readLiveSnapshot(): LiveTrafficSnapshot {
+    const stats = this.readStatsFile();
+    let uploadSpeed = Math.max(Math.round(stats.up), 0);
+    let downloadSpeed = Math.max(Math.round(stats.down), 0);
+    if (this.lastLiveUploadTotal >= 0 && this.lastLiveDownloadTotal >= 0 && this.lastLiveUpdatedAt > 0) {
+      const elapsedMs = stats.updatedAt - this.lastLiveUpdatedAt;
+      const uploadDelta = Math.max(stats.upTotal - this.lastLiveUploadTotal, 0);
+      const downloadDelta = Math.max(stats.downTotal - this.lastLiveDownloadTotal, 0);
+      uploadSpeed = Math.max(uploadSpeed, this.bytesPerSecond(uploadDelta, elapsedMs));
+      downloadSpeed = Math.max(downloadSpeed, this.bytesPerSecond(downloadDelta, elapsedMs));
+    }
+    this.lastLiveUploadTotal = stats.upTotal;
+    this.lastLiveDownloadTotal = stats.downTotal;
+    this.lastLiveUpdatedAt = stats.updatedAt;
+    return {
+      uploadSpeed,
+      downloadSpeed,
+      source: stats.source,
+      updatedAt: stats.updatedAt
+    };
   }
 
   refreshDailySnapshot(): void {
@@ -67,18 +101,21 @@ export class TrafficStatsService {
     if (this.lastUploadTotal < 0 || this.lastDownloadTotal < 0) {
       this.lastUploadTotal = stats.upTotal;
       this.lastDownloadTotal = stats.downTotal;
+      this.lastSampleUpdatedAt = stats.updatedAt;
       return;
     }
 
     const uploadDelta = Math.max(stats.upTotal - this.lastUploadTotal, 0);
     const downloadDelta = Math.max(stats.downTotal - this.lastDownloadTotal, 0);
+    const elapsedMs = stats.updatedAt - this.lastSampleUpdatedAt;
     const daily = this.addDailyTraffic(now, uploadDelta, downloadDelta);
 
     this.lastUploadTotal = stats.upTotal;
     this.lastDownloadTotal = stats.downTotal;
+    this.lastSampleUpdatedAt = stats.updatedAt;
     this.runtimeStore.update({
-      uploadSpeed: Math.max(Math.round(stats.up), 0),
-      downloadSpeed: Math.max(Math.round(stats.down), 0),
+      uploadSpeed: Math.max(Math.round(stats.up), this.bytesPerSecond(uploadDelta, elapsedMs)),
+      downloadSpeed: Math.max(Math.round(stats.down), this.bytesPerSecond(downloadDelta, elapsedMs)),
       todayUploadBytes: daily.uploadBytes,
       todayDownloadBytes: daily.downloadBytes,
       trafficSource: 'native-mihomo'
@@ -183,5 +220,12 @@ export class TrafficStatsService {
   private safeNumber(input: number): number {
     const value = Number(input);
     return Number.isFinite(value) ? value : 0;
+  }
+
+  private bytesPerSecond(deltaBytes: number, elapsedMs: number): number {
+    if (deltaBytes <= 0 || elapsedMs <= 0) {
+      return 0;
+    }
+    return Math.max(Math.round(deltaBytes * 1000 / elapsedMs), 0);
   }
 }

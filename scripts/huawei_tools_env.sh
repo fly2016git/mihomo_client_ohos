@@ -18,5 +18,5 @@ export OHOS_GO="${OHOS_GO:-/private/tmp/ohos_golang_go/bin/go}"
 
 export POC_DEVICE_TARGET="${POC_DEVICE_TARGET:-192.168.3.65:39589}"
 export POC_ENTRY_HAP="${POC_ENTRY_HAP:-entry/build/default/outputs/default/entry-default-signed.hap}"
-export POC_BUNDLE_NAME="${POC_BUNDLE_NAME:-com.fly.clashguard}"
+export POC_BUNDLE_NAME="${POC_BUNDLE_NAME:-com.fly.fluxgate}"
 export POC_ENTRY_ABILITY="${POC_ENTRY_ABILITY:-EntryAbility}"
