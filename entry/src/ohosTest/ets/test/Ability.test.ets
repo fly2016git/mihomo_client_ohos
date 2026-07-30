@@ -4,6 +4,7 @@ import fs from '@ohos.file.fs';
 import { ConfigService } from '../../../main/ets/config/ConfigService';
 import { DEFAULT_APP_SETTINGS, makeSubscriptionMeta } from '../../../main/ets/models/MvpTypes';
 import { SubscriptionUrlPolicy } from '../../../main/ets/subscription/SubscriptionUrlPolicy';
+import { ProxyRuntimePolicy } from '../../../main/ets/runtime/ProxyRuntimePolicy';
 
 export default function abilityTest() {
   describe('FluxGate device policy tests', () => {
@@ -22,6 +23,12 @@ export default function abilityTest() {
     it('enforces secure subscription transport', 0, () => {
       expect(SubscriptionUrlPolicy.validate('https://example.com/config.yaml').ok).assertTrue();
       expect(SubscriptionUrlPolicy.validate('http://example.com/config.yaml').ok).assertFalse();
+    });
+
+    it('gates proxy controls by runtime state and active profile', 0, () => {
+      expect(ProxyRuntimePolicy.isReady('connected', 'running', 'profile-a', 'profile-a')).assertTrue();
+      expect(ProxyRuntimePolicy.isReady('idle', 'stopped', 'profile-a', 'profile-a')).assertFalse();
+      expect(ProxyRuntimePolicy.isReady('connected', 'running', 'profile-a', 'profile-b')).assertFalse();
     });
 
     it('restores a damaged profile index from backup', 0, () => {

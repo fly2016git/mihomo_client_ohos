@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { DEFAULT_APP_SETTINGS, makeSubscriptionMeta } from '../main/ets/models/MvpTypes';
 import { SubscriptionUrlPolicy } from '../main/ets/subscription/SubscriptionUrlPolicy';
+import { ProxyRuntimePolicy } from '../main/ets/runtime/ProxyRuntimePolicy';
 
 export default function localUnitTest() {
   describe('FluxGate model and policy tests', () => {
@@ -42,6 +43,15 @@ export default function localUnitTest() {
       expect(relative.ok).assertTrue();
       expect(relative.normalizedUrl.startsWith('https://example.com/')).assertTrue();
       expect(downgrade.ok).assertFalse();
+    });
+
+    it('opens proxy controls only for the connected active profile', 0, () => {
+      expect(ProxyRuntimePolicy.isReady('connected', 'running', 'profile-a', 'profile-a')).assertTrue();
+      expect(ProxyRuntimePolicy.isReady('idle', 'stopped', 'profile-a', 'profile-a')).assertFalse();
+      expect(ProxyRuntimePolicy.isReady('connected', 'running', 'profile-a', 'profile-b')).assertFalse();
+      expect(ProxyRuntimePolicy.resolve('starting', 'loading', 'profile-a', 'profile-a'))
+        .assertEqual('transitioning');
+      expect(ProxyRuntimePolicy.resolve('error', 'error', 'profile-a', 'profile-a')).assertEqual('error');
     });
   });
 }

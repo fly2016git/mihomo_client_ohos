@@ -10,6 +10,7 @@ import { ConfigService } from '../config/ConfigService';
 import { ConfigValidationService } from '../config/ConfigValidationService';
 import {
   AppSettings,
+  CoreState,
   ConfigValidationResult,
   DEFAULT_APP_SETTINGS,
   DnsMode,
@@ -24,10 +25,12 @@ import {
   RuntimeEvent,
   RuntimeEventLevel,
   RuntimeSnapshot,
+  RuntimeState,
   TrafficStatsSource,
   VpnRouteMode
 } from '../models/MvpTypes';
 import { RuntimeStore } from '../runtime/RuntimeStore';
+import { ProxyRuntimeAccessState, ProxyRuntimePolicy } from '../runtime/ProxyRuntimePolicy';
 import { TrafficStatsService } from '../runtime/TrafficStatsService';
 import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
@@ -50,6 +53,9 @@ interface ImportedTextFile {
 struct Index {
   @State statusText: string = 'Idle';
   @State coreText: string = 'Stopped';
+  @State runtimeState: RuntimeState = 'idle';
+  @State coreState: CoreState = 'stopped';
+  @State runtimeProfileId: string = '';
   @State activeProfileName: string = '未配置';
   @State activeProfileId: string = '';
   @State lastError: string = '';
@@ -360,6 +366,9 @@ struct Index {
   }
 
   private applySnapshot(snapshot: RuntimeSnapshot): void {
+    this.runtimeState = snapshot.runtimeState;
+    this.coreState = snapshot.coreState;
+    this.runtimeProfileId = snapshot.activeProfileId;
     this.statusText = this.toDisplayState(snapshot.runtimeState);
     this.coreText = this.toDisplayState(snapshot.coreState);
     this.lastError = snapshot.lastError;
@@ -370,6 +379,9 @@ struct Index {
     this.trafficSource = snapshot.trafficSource;
     if (this.lastError.length === 0 && snapshot.lastEvent.length > 0) {
       this.validationText = snapshot.lastEvent;
+    }
+    if (!this.isProxyRuntimeReady() && this.latencyBusy) {
+      this.latencyBusy = false;
     }
   }
 
@@ -991,8 +1003,17 @@ struct Index {
     if (message.startsWith('Latency test requested groups=')) {
       return '已请求节点测速，组数=' + message.substring('Latency test requested groups='.length);
     }
+    if (message === 'Latency test skipped: proxy runtime not ready') {
+      return '已跳过节点测速：代理尚未连接';
+    }
+    if (message === 'Latency test skipped: proxy runtime disconnected') {
+      return '节点测速已停止：连接已经断开';
+    }
     if (message.startsWith('Latency test skipped: ')) {
       return '已跳过节点测速：' + message.substring('Latency test skipped: '.length);
+    }
+    if (message === 'Proxy selection skipped: proxy runtime not ready') {
+      return '已跳过节点切换：代理尚未连接';
     }
     if (message.startsWith('Proxy selected group=')) {
       return '节点已切换，组=' + message.substring('Proxy selected group='.length);
@@ -1650,11 +1671,36 @@ struct Index {
     this.nodes = this.getSelectedProxyGroupNodes();
   }
 
+  private proxyRuntimeAccessState(): ProxyRuntimeAccessState {
+    return ProxyRuntimePolicy.resolve(this.runtimeState, this.coreState, this.runtimeProfileId,
+      this.activeProfileId);
+  }
+
+  private isProxyRuntimeReady(): boolean {
+    return this.proxyRuntimeAccessState() === 'ready';
+  }
+
+  private proxyRuntimeUnavailableMessage(): string {
+    const state = this.proxyRuntimeAccessState();
+    if (state === 'transitioning') {
+      return '连接状态切换中，请稍后操作';
+    }
+    if (state === 'error') {
+      return '连接状态异常，请重新连接后操作';
+    }
+    return '请先连接代理后再操作节点';
+  }
+
   private async testProxyLatency(scope: string): Promise<void> {
     if (!this.runtimeStore || !this.vpnControlService || !this.configService) {
       return;
     }
     if (this.latencyBusy) {
+      return;
+    }
+    if (!this.isProxyRuntimeReady()) {
+      this.validationText = this.proxyRuntimeUnavailableMessage();
+      this.runtimeStore.appendEvent('Latency test skipped: proxy runtime not ready', 'info', 'ui');
       return;
     }
     const targetGroups = this.getLatencyTargetGroups(scope);
@@ -1681,8 +1727,14 @@ struct Index {
         this.validationText = state.error.length > 0 ? state.error : '测速失败';
       }
     } catch (err) {
-      this.validationText = '测速失败: ' + this.toErrorText(err);
-      this.runtimeStore.appendEvent('Latency test error: ' + this.toErrorText(err));
+      const message = this.toErrorText(err);
+      if (message.endsWith('PROXY_RUNTIME_NOT_READY') || message.endsWith('PROXY_RUNTIME_DISCONNECTED')) {
+        this.validationText = '连接已断开，测速已停止';
+        this.runtimeStore.appendEvent('Latency test skipped: proxy runtime disconnected', 'info', 'ui');
+      } else {
+        this.validationText = '测速失败: ' + message;
+        this.runtimeStore.appendEvent('Latency test error: ' + message);
+      }
     } finally {
       this.latencyBusy = false;
     }
@@ -1695,6 +1747,13 @@ struct Index {
         const state = this.configService.loadProxyLatencyState();
         if (state.requestId === requestId && (state.status === 'complete' || state.status === 'error')) {
           return state;
+        }
+      }
+      if (this.runtimeStore) {
+        const snapshot = this.runtimeStore.getSnapshot();
+        if (!ProxyRuntimePolicy.isReady(snapshot.runtimeState, snapshot.coreState, snapshot.activeProfileId,
+          this.activeProfileId)) {
+          throw new Error('PROXY_RUNTIME_DISCONNECTED');
         }
       }
       await this.sleep(500);
@@ -1968,20 +2027,9 @@ struct Index {
       return;
     }
     const snapshot = this.runtimeStore.getSnapshot();
-    if (snapshot.runtimeState === 'starting' || snapshot.runtimeState === 'stopping') {
-      this.validationText = '连接状态切换中，请稍后选择节点';
-      return;
-    }
-    if (snapshot.runtimeState !== 'connected' || snapshot.coreState !== 'running') {
-      const ok = this.configService.selectLocalProxy(node.group, node.name, this.activeProfileId);
-      this.validationText = ok ? '节点选择已保存，将在连接时应用' : '节点选择失败';
-      this.runtimeStore.appendEvent(ok ?
-        'Proxy selected for next connection group=' + node.group + ' node=' + node.name :
-        'Proxy select failed group=' + node.group + ' node=' + node.name);
-      if (ok) {
-        this.reloadProfiles();
-        this.refreshState();
-      }
+    if (!ProxyRuntimePolicy.isReady(snapshot.runtimeState, snapshot.coreState, snapshot.activeProfileId,
+      this.activeProfileId)) {
+      this.validationText = this.proxyRuntimeUnavailableMessage();
       return;
     }
 
@@ -2728,19 +2776,26 @@ struct Index {
     Scroll() {
       Column({ space: 14 }) {
         if (this.activeProfileId.length === 0) {
-          this.EmptyCard('暂无配置', '请先新建配置，再选择和测试代理节点')
-          Button('新建配置')
-            .height(44)
-            .width('100%')
-            .fontSize(14)
-            .fontColor('#042F2E')
-            .backgroundColor(this.accentColor())
-            .borderRadius(10)
-            .onClick(() => {
-              this.selectSection(3);
+          this.ProxyRuntimeGate('暂无配置', '添加配置后，在首页建立连接即可管理代理节点', '添加配置', () => {
+            this.selectSection(3);
+          })
+        } else if (this.proxyRuntimeAccessState() === 'transitioning') {
+          this.ProxyRuntimeGate(this.runtimeState === 'stopping' ? '正在断开' : '正在连接',
+            '连接状态切换完成后即可管理代理节点', '', () => {
             })
+        } else if (this.proxyRuntimeAccessState() === 'disconnected') {
+          this.ProxyRuntimeGate('尚未连接', '连接后可查看、切换和测试当前配置的节点', '返回首页连接', () => {
+            this.selectSection(0);
+          })
+        } else if (this.proxyRuntimeAccessState() === 'error') {
+          this.ProxyRuntimeGate('连接状态异常', '节点信息暂不可用，请检查诊断信息后重新连接', '查看诊断', () => {
+            this.selectSection(9);
+          })
+        } else if (this.nodes.length === 0) {
+          this.ProxyRuntimeGate('暂无节点', '当前连接配置中没有可管理的代理节点', '查看配置', () => {
+            this.selectSection(2);
+          })
         } else {
-          if (this.proxyGroups.length > 0) {
           Scroll() {
             Row({ space: 8 }) {
               ForEach(this.proxyGroups, (group: ProxyGroup) => {
@@ -2752,54 +2807,37 @@ struct Index {
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .width('100%')
-          }
 
           TextInput({ text: this.nodeSearchText, placeholder: '搜索节点、类型或地址' })
-          .height(44)
-          .width('100%')
-          .fontSize(13)
-          .fontColor(this.primaryText())
-          .placeholderColor(this.mutedText())
-          .backgroundColor(this.inputBg())
-          .borderRadius(10)
-          .onChange((value: string) => {
-            this.nodeSearchText = value;
-          })
-
-          Row({ space: 10 }) {
-          Button(this.latencyBusy ? '测速中' : '测速全部')
-            .height(42)
-            .layoutWeight(1)
+            .height(44)
+            .width('100%')
             .fontSize(13)
-            .fontColor(this.accentColor())
-            .backgroundColor(this.elevatedBg())
+            .fontColor(this.primaryText())
+            .placeholderColor(this.mutedText())
+            .backgroundColor(this.inputBg())
             .borderRadius(10)
-            .enabled(!this.latencyBusy)
-            .onClick(() => {
-              this.testProxyLatency('all');
+            .onChange((value: string) => {
+              this.nodeSearchText = value;
             })
+
           Button(this.latencyBusy ? '测速中' : '测速当前组')
             .height(42)
-            .layoutWeight(1)
+            .width('100%')
             .fontSize(13)
-            .fontColor(this.accentColor())
+            .fontColor(this.latencyBusy ? this.mutedText() : this.accentColor())
             .backgroundColor(this.elevatedBg())
             .borderRadius(10)
-            .enabled(!this.latencyBusy)
+            .enabled(!this.latencyBusy && this.isProxyRuntimeReady())
             .onClick(() => {
               this.testProxyLatency('group');
             })
-          }
-          .width('100%')
 
           this.SectionTitle(this.getFilteredNodes().length.toString() + ' / ' +
             this.getSelectedProxyGroupNodes().length.toString() + ' 个节点 · ' + this.selectedProxyGroupLabel(), '')
 
           this.ProxyGroupSummary()
 
-          if (this.nodes.length === 0) {
-            this.EmptyCard('暂无节点', '请先在配置页更新或导入包含 proxies 的配置')
-          } else if (this.getFilteredNodes().length === 0) {
+          if (this.getFilteredNodes().length === 0) {
             this.EmptyCard('无匹配节点', '请调整搜索关键字')
           }
 
@@ -2819,6 +2857,49 @@ struct Index {
     .layoutWeight(1)
     .width('100%')
     .backgroundColor(this.appBg())
+  }
+
+  @Builder ProxyRuntimeGate(title: string, subtitle: string, actionLabel: string, action: () => void) {
+    Column({ space: 14 }) {
+      Row() {
+        SymbolGlyph($r('sys.symbol.wifi_router'))
+          .fontSize(30)
+          .fontColor([this.proxyRuntimeAccessState() === 'transitioning' ? this.accentColor() : this.mutedText()])
+      }
+      .width(64)
+      .height(64)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor(this.elevatedBg())
+      .borderRadius(18)
+
+      Text(title)
+        .fontSize(19)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(this.primaryText())
+
+      Text(subtitle)
+        .fontSize(13)
+        .fontColor(this.secondaryText())
+        .textAlign(TextAlign.Center)
+        .maxLines(3)
+        .width('100%')
+
+      if (actionLabel.length > 0) {
+        Button(actionLabel)
+          .height(44)
+          .constraintSize({ minWidth: 160, maxWidth: 280 })
+          .fontSize(14)
+          .fontColor('#042F2E')
+          .backgroundColor(this.accentColor())
+          .borderRadius(10)
+          .onClick(action)
+      }
+    }
+    .width('100%')
+    .height(this.isTabletLayout() ? 460 : 380)
+    .padding({ left: 20, right: 20 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder ModeChip(title: string, selected: boolean) {

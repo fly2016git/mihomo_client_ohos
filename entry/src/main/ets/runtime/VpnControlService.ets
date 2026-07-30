@@ -5,6 +5,7 @@ import { ConfigService } from '../config/ConfigService';
 import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { RuntimeStore } from './RuntimeStore';
+import { ProxyRuntimePolicy } from './ProxyRuntimePolicy';
 
 const BUNDLE_NAME = 'com.fly.fluxgate';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
@@ -113,6 +114,7 @@ export class VpnControlService {
 
   async requestProxyLatency(requestId: string, profileId: string, groupNames: string[], url: string,
     timeoutMs: number): Promise<void> {
+    this.ensureProxyRuntimeReady(profileId, 'Latency test');
     this.configService.saveProxyLatencyState({
       requestId,
       status: 'running',
@@ -139,6 +141,7 @@ export class VpnControlService {
 
   async requestProxySelection(requestId: string, profileId: string, groupName: string,
     nodeName: string): Promise<void> {
+    this.ensureProxyRuntimeReady(profileId, 'Proxy selection');
     this.configService.saveProxySelectionRequestState({
       requestId,
       profileId,
@@ -170,6 +173,15 @@ export class VpnControlService {
         resolve();
       }, ms);
     });
+  }
+
+  private ensureProxyRuntimeReady(profileId: string, operation: string): void {
+    const snapshot = this.runtimeStore.getSnapshot();
+    if (ProxyRuntimePolicy.isReady(snapshot.runtimeState, snapshot.coreState, snapshot.activeProfileId, profileId)) {
+      return;
+    }
+    this.runtimeStore.appendEvent(operation + ' skipped: proxy runtime not ready', 'info', 'ui');
+    throw new Error('PROXY_RUNTIME_NOT_READY');
   }
 
   private async startBackgroundRunning(): Promise<void> {
