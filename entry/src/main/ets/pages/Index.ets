@@ -874,6 +874,28 @@ struct Index {
   }
 
   private localizedMessage(message: string): string {
+    const subscriptionInvalidMark = 'SUBSCRIPTION_CONFIG_INVALID: ';
+    const subscriptionInvalidIndex = message.indexOf(subscriptionInvalidMark);
+    if (subscriptionInvalidIndex >= 0) {
+      const detail = message.substring(subscriptionInvalidIndex + subscriptionInvalidMark.length);
+      return '添加失败：订阅返回的配置无效，请检查二维码或联系配置提供方。' +
+        (detail.length > 0 ? ' 详情：' + detail : '');
+    }
+    if (message.indexOf('LATENCY_CONFIG_INVALID') >= 0) {
+      return '当前连接配置无效，代理组不存在或无法测速';
+    }
+    if (message.indexOf('LATENCY_ALL_NODES_UNAVAILABLE') >= 0) {
+      return '当前连接配置中的节点均不可用，请检查节点信息或网络连接';
+    }
+    if (message.indexOf('LATENCY_CORE_UNAVAILABLE') >= 0) {
+      return '测速服务暂不可用，请断开后重新连接';
+    }
+    if (message.indexOf('LATENCY_REQUEST_FAILED') >= 0) {
+      return '测速请求失败，请稍后重试';
+    }
+    if (message.indexOf('mihomo not running in VPN process') >= 0) {
+      return 'VPN 核心已经停止，请重新连接后测速';
+    }
     if (message.startsWith('Error: ')) {
       return '错误：' + this.localizedMessage(message.substring('Error: '.length));
     }
@@ -911,8 +933,26 @@ struct Index {
     if (message === 'Connect requested') {
       return '已请求连接';
     }
+    if (message === 'Connect request retry after VPN authorization') {
+      return 'VPN 授权已完成，正在继续连接';
+    }
+    if (message === 'VPN_CONNECT_REQUEST_NOT_ACKNOWLEDGED') {
+      return 'VPN 授权完成后连接请求未被系统接收，请重试';
+    }
+    if (message === 'VPN_CONNECT_REQUEST_REJECTED') {
+      return 'VPN 连接请求被拒绝，请重试';
+    }
     if (message === 'Disconnect requested') {
       return '已请求断开连接';
+    }
+    if (message === 'Disconnect traffic polling stopped') {
+      return '断开连接：流量轮询已停止';
+    }
+    if (message === 'Disconnect TUN closed and VPN destroyed') {
+      return '断开连接：TUN 已关闭，VPN 已销毁';
+    }
+    if (message === 'VPN extension stop requested') {
+      return '断开连接：已请求停止 VPN 扩展';
     }
     if (message === 'Config saved') {
       return '配置已保存';
@@ -969,7 +1009,7 @@ struct Index {
       return '正在启动 VPN，配置=' + message.substring('Starting VPN profile='.length);
     }
     if (message.startsWith('Connect failed: ')) {
-      return '连接失败：' + message.substring('Connect failed: '.length);
+      return '连接失败：' + this.localizedMessage(message.substring('Connect failed: '.length));
     }
     if (message.startsWith('Disconnect failed: ')) {
       return '断开失败：' + message.substring('Disconnect failed: '.length);
@@ -1716,15 +1756,16 @@ struct Index {
       const requestId = 'lat-' + Date.now().toString();
       const groupNames = targetGroups.map((group: ProxyGroup) => group.name);
       await this.vpnControlService.requestProxyLatency(requestId, this.activeProfileId, groupNames,
-        this.delayTestUrl(), 8000);
-      const state = await this.waitProxyLatencyResult(requestId, Math.max(25000, groupNames.length * 10000 + 10000));
+        this.primaryDelayTestUrl(), this.fallbackDelayTestUrl(), 8000);
+      const state = await this.waitProxyLatencyResult(requestId,
+        Math.max(30000, groupNames.length * 20000 + 10000));
       this.proxyDelayRecords = state.records;
       this.proxyGroups = this.withMeasuredDelays(this.proxyGroups, this.activeProfileId);
       this.nodes = this.getSelectedProxyGroupNodes();
       if (state.status === 'complete') {
         this.validationText = scope === 'all' ? '测速全部完成' : '当前组测速完成';
       } else {
-        this.validationText = state.error.length > 0 ? state.error : '测速失败';
+        this.validationText = state.error.length > 0 ? this.localizedMessage(state.error) : '测速失败';
       }
     } catch (err) {
       const message = this.toErrorText(err);
@@ -1757,6 +1798,20 @@ struct Index {
         }
       }
       await this.sleep(500);
+    }
+    if (this.configService) {
+      const state = this.configService.loadProxyLatencyState();
+      if (state.requestId === requestId && state.status === 'running') {
+        const timeoutState: ProxyLatencyState = {
+          requestId,
+          status: 'error',
+          updatedAt: Date.now(),
+          error: 'latency test timeout',
+          records: state.records
+        };
+        this.configService.saveProxyLatencyState(timeoutState);
+        return timeoutState;
+      }
     }
     throw new Error('latency test timeout');
   }
@@ -1824,8 +1879,12 @@ struct Index {
     return fallback;
   }
 
-  private delayTestUrl(): string {
-    return 'http://www.gstatic.com/generate_204';
+  private primaryDelayTestUrl(): string {
+    return 'https://www.gstatic.com/generate_204';
+  }
+
+  private fallbackDelayTestUrl(): string {
+    return 'https://connect.rom.miui.com/generate_204';
   }
 
   private getFilteredRuntimeEvents(): RuntimeEvent[] {
@@ -1998,21 +2057,17 @@ struct Index {
     return this.statusText === 'Connected' ? '待确认' : '未运行';
   }
 
-  private gracefulStopText(): string {
+  private shutdownCleanupText(): string {
     for (const event of this.runtimeEvents) {
       const lower = event.message.toLowerCase();
-      if (lower.indexOf('mihomo graceful stop: ok') >= 0) {
-        return '已验证可用';
+      if (lower.indexOf('disconnect tun closed and vpn destroyed') >= 0) {
+        return '已验证：系统进程退出';
       }
-      if (lower.indexOf('mihomo graceful stop') >= 0 &&
-        (lower.indexOf('failed') >= 0 || lower.indexOf('threw') >= 0)) {
+      if (lower.indexOf('disconnect failed') >= 0) {
         return '异常：' + this.localizedMessage(event.message);
       }
-      if (lower.indexOf('skipping graceful stop') >= 0) {
-        return '已跳过：无活动的 TUN 文件描述符';
-      }
     }
-    return this.tunFdText() !== '-1' ? '可用，待断开验证' : '未运行';
+    return this.tunFdText() !== '-1' ? '由系统管理，待断开验证' : '由系统管理';
   }
 
   private pocSmokeSummary(): string {
@@ -2820,17 +2875,31 @@ struct Index {
               this.nodeSearchText = value;
             })
 
-          Button(this.latencyBusy ? '测速中' : '测速当前组')
-            .height(42)
-            .width('100%')
-            .fontSize(13)
-            .fontColor(this.latencyBusy ? this.mutedText() : this.accentColor())
-            .backgroundColor(this.elevatedBg())
-            .borderRadius(10)
-            .enabled(!this.latencyBusy && this.isProxyRuntimeReady())
-            .onClick(() => {
-              this.testProxyLatency('group');
-            })
+          Row({ space: 10 }) {
+            Button(this.latencyBusy ? '测速中' : '测速全部')
+              .height(42)
+              .layoutWeight(1)
+              .fontSize(13)
+              .fontColor(this.latencyBusy ? this.mutedText() : this.accentColor())
+              .backgroundColor(this.elevatedBg())
+              .borderRadius(10)
+              .enabled(!this.latencyBusy && this.isProxyRuntimeReady())
+              .onClick(() => {
+                this.testProxyLatency('all');
+              })
+            Button(this.latencyBusy ? '测速中' : '测速当前组')
+              .height(42)
+              .layoutWeight(1)
+              .fontSize(13)
+              .fontColor(this.latencyBusy ? this.mutedText() : this.accentColor())
+              .backgroundColor(this.elevatedBg())
+              .borderRadius(10)
+              .enabled(!this.latencyBusy && this.isProxyRuntimeReady())
+              .onClick(() => {
+                this.testProxyLatency('group');
+              })
+          }
+          .width('100%')
 
           this.SectionTitle(this.getFilteredNodes().length.toString() + ' / ' +
             this.getSelectedProxyGroupNodes().length.toString() + ' 个节点 · ' + this.selectedProxyGroupLabel(), '')
@@ -3803,7 +3872,7 @@ struct Index {
           this.coreStateLabel(this.coreText), '更新时间：' + this.snapshotUpdatedText() + ' · 启动时间：' +
           this.startedAtText())
         this.DiagCard('Mihomo 核心', '版本：' + this.mihomoVersionText(),
-          '平滑停止：' + this.gracefulStopText())
+          '退出清理：' + this.shutdownCleanupText())
         this.DiagCard('当前配置', this.activeProfileLabel(), this.activeProfileId)
         this.DiagCard('当前节点', this.selectedProxyGroupLabel() + ' / ' + this.selectedNodeName(), this.selectedNodeMeta())
         this.DiagCard('通信桥接', 'TUN 文件描述符：' + this.tunFdText(), '保护钩子：' + this.protectHookText())

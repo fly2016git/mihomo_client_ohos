@@ -1,21 +1,21 @@
 import { bundleManager, Want } from '@kit.AbilityKit';
 import fs from '@ohos.file.fs';
+import http from '@ohos.net.http';
 import { connection, VpnExtensionAbility, vpnExtension } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { ConfigService } from '../config/ConfigService';
+import { ConfigService, MIHOMO_CONTROLLER_BASE_URL } from '../config/ConfigService';
 import { BundledGeoIpService } from '../geo/BundledGeoIpService';
 import { RuntimeStore } from '../runtime/RuntimeStore';
 import { TrafficStatsService } from '../runtime/TrafficStatsService';
 import { Profile, ProxyLatencyRecord, ProxyLatencyState } from '../models/MvpTypes';
 import { SettingsService } from '../settings/SettingsService';
-import pocNative, { PocStatus } from '../native/PocNative';
+import pocNative from '../native/PocNative';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoPocVpn';
 const BUNDLE_NAME = 'com.fly.fluxgate';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
 const TUN_EAGAIN_POLL_MS = 50;
-const GRACEFUL_STOP_TIMEOUT_MS = 3000;
 const DEFAULT_UDP_ECHO_HOST = '192.168.3.62';
 const DEFAULT_UDP_ECHO_PORT = 53535;
 const DEFAULT_RAW_UDP_PREFLIGHT = false;
@@ -264,6 +264,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
   onCreate(want: Want): void {
     this.vpnContext = this.context;
     hilog.debug(DOMAIN, TAG, 'onCreate request=%{public}s', this.requestLabel(want));
+    this.reconcilePersistedRuntimeState('onCreate');
   }
 
   onRequest(want: Want, startId: number): void {
@@ -618,7 +619,10 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     const requestId = this.getStringParam(params, 'requestId', 'latency-' + Date.now().toString());
     const profileId = this.getStringParam(params, 'profileId', 'default');
     const groupNames = this.parseLatencyGroupNames(this.getStringParam(params, 'groupNames', ''));
-    const url = this.getStringParam(params, 'url', 'http://www.gstatic.com/generate_204');
+    const legacyUrl = this.getStringParam(params, 'url', 'https://www.gstatic.com/generate_204');
+    const primaryUrl = this.getStringParam(params, 'primaryUrl', legacyUrl);
+    const fallbackUrl = this.getStringParam(params, 'fallbackUrl',
+      'https://connect.rom.miui.com/generate_204');
     const timeoutMs = this.getNumberParam(params, 'timeoutMs', 8000);
     const previous = configService.loadProxyLatencyState().records;
     const remaining = previous.filter((record: ProxyLatencyRecord) => {
@@ -635,6 +639,9 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     }
 
     if (this.mihomoStartedBy.length === 0) {
+      this.reconcilePersistedRuntimeState('latency');
+    }
+    if (this.mihomoStartedBy.length === 0) {
       this.saveProductLatencyState(configService, requestId, 'error',
         'mihomo not running in VPN process', previous);
       store.appendEvent('Latency test error: mihomo not running in VPN process');
@@ -646,51 +653,92 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     const errors: string[] = [];
     let tested = 0;
     let failed = 0;
+    let terminalError = 'latency test failed';
 
-    for (const groupName of groupNames) {
-      try {
-        const json = await pocNative.testMihomoGroupDelay(groupName, url, timeoutMs);
-        const result = this.parseNativeDelayResult(json);
-        if (!result.ok && result.error.length > 0) {
-          errors.push(groupName + ': ' + result.error);
-        }
-        for (const item of result.delays) {
-          if (item.ok && item.delay > 0) {
-            nextRecords.push({
-              profileId,
-              groupName,
-              nodeName: item.name,
-              delay: item.delay,
-              updatedAt: now
-            });
-            tested += 1;
-          } else {
-            failed += 1;
-            if (item.error.length > 0) {
-              errors.push(item.name + ': ' + item.error);
+    try {
+      for (const groupName of groupNames) {
+        try {
+          let result: NativeDelayResult;
+          try {
+            const json = await this.testMihomoGroupDelayWithTimeout(groupName, primaryUrl, timeoutMs);
+            result = this.parseNativeDelayResult(json);
+          } catch (err) {
+            result = this.createFailedDelayResult(groupName, primaryUrl, timeoutMs, this.toErrorText(err));
+          }
+
+          if (!this.hasSuccessfulDelay(result)) {
+            const primaryError = result.error.length > 0 ? result.error : 'no valid delay result';
+            store.appendEvent('Latency test fallback group=' + groupName + ' primary=' + primaryUrl +
+              ' reason=' + primaryError, 'warn', 'core');
+            try {
+              const fallbackJson = await this.testMihomoGroupDelayWithTimeout(groupName, fallbackUrl, timeoutMs);
+              result = this.parseNativeDelayResult(fallbackJson);
+            } catch (err) {
+              result = this.createFailedDelayResult(groupName, fallbackUrl, timeoutMs, this.toErrorText(err));
+            }
+            if (!this.hasSuccessfulDelay(result)) {
+              const fallbackError = result.error.length > 0 ? result.error : 'no valid delay result';
+              result.error = 'primary: ' + primaryError + '; fallback: ' + fallbackError;
+            } else {
+              store.appendEvent('Latency test fallback succeeded group=' + groupName + ' url=' + fallbackUrl,
+                'info', 'core');
             }
           }
-        }
-      } catch (err) {
-        failed += 1;
-        errors.push(groupName + ': ' + this.toErrorText(err));
-      }
-    }
 
-    const errorText = errors.length > 0 ? errors[0] : '';
-    const records = remaining.concat(nextRecords);
-    const status = tested > 0 ? 'complete' : 'error';
-    configService.saveProxyLatencyState({
-      requestId,
-      status,
-      updatedAt: Date.now(),
-      error: status === 'complete' ? errorText : (errorText.length > 0 ? errorText : 'latency test failed'),
-      records
-    });
-    store.appendEvent('Latency test native scope=request groups=' + groupNames.length.toString() +
-      ' ok=' + tested.toString() + ' failed=' + failed.toString());
-    if (errorText.length > 0) {
-      store.appendEvent('Latency test error: ' + errorText);
+          if (!result.ok && result.error.length > 0) {
+            errors.push(groupName + ': ' + result.error);
+          }
+          if (!this.hasSuccessfulDelay(result) && result.delays.length === 0) {
+            failed += 1;
+          }
+          for (const item of result.delays) {
+            if (item.ok && item.delay > 0) {
+              nextRecords.push({
+                profileId,
+                groupName,
+                nodeName: item.name,
+                delay: item.delay,
+                updatedAt: now
+              });
+              tested += 1;
+            } else {
+              failed += 1;
+              if (item.error.length > 0) {
+                errors.push(item.name + ': ' + item.error);
+              }
+            }
+          }
+        } catch (err) {
+          failed += 1;
+          errors.push(groupName + ': ' + this.toErrorText(err));
+        }
+      }
+
+      const errorText = errors.length > 0 ? errors[0] : '';
+      const records = remaining.concat(nextRecords);
+      const status = tested > 0 ? 'complete' : 'error';
+      terminalError = status === 'complete' ? errorText :
+        (errorText.length > 0 ? errorText : 'latency test failed');
+      configService.saveProxyLatencyState({
+        requestId,
+        status,
+        updatedAt: Date.now(),
+        error: terminalError,
+        records
+      });
+      store.appendEvent('Latency test controller scope=request groups=' + groupNames.length.toString() +
+        ' ok=' + tested.toString() + ' failed=' + failed.toString());
+      if (errorText.length > 0) {
+        store.appendEvent('Latency test error: ' + errorText);
+      }
+    } catch (err) {
+      terminalError = this.toErrorText(err);
+      store.appendEvent('Latency test error: ' + terminalError);
+    } finally {
+      const current = configService.loadProxyLatencyState();
+      if (current.requestId === requestId && current.status === 'running') {
+        this.saveProductLatencyState(configService, requestId, 'error', terminalError, current.records);
+      }
     }
   }
 
@@ -794,32 +842,11 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
     store.appendEvent('Stopping VPN');
 
     try {
-      const hasTunFd = this.tunFd >= 0;
-
-      // MVP-01B disconnect protocol:
-      // 1. If fd-backed TUN, attempt graceful stop via hub.Parse(stoppedConfig)
-      //    which drains mihomo TUN reader goroutines. Otherwise call stop.
-      // 2. Brief cooldown before destroying VPN/TUN fd.
-      if (hasTunFd) {
-        // Try graceful stop: switch mihomo to no-TUN config to drain reader goroutines
-        try {
-          const gracefulStatus: PocStatus = await this.gracefulStopWithTimeout(GRACEFUL_STOP_TIMEOUT_MS);
-          store.appendEvent('Mihomo graceful stop: ' + (gracefulStatus.ok ? 'ok' : 'failed code=' + gracefulStatus.code));
-          hilog.debug(DOMAIN, TAG, 'MVP-01B gracefulStopMihomo ok=%{public}s code=%{public}d',
-            gracefulStatus.ok ? 'true' : 'false', gracefulStatus.code);
-        } catch (err) {
-          hilog.warn(DOMAIN, TAG, 'MVP-01B gracefulStopMihomo threw: %{public}s', this.toErrorText(err));
-          store.appendEvent('Mihomo graceful stop threw: ' + this.toErrorText(err));
-        }
-      } else {
-        store.appendEvent('MVP-01B disconnect: no active TUN fd, skipping graceful stop');
-      }
-
-      // Brief cooldown before destroying VPN/TUN fd
-      await this.sleep(500);
-
       this.stopTrafficPolling(true);
+      store.appendEvent('Disconnect traffic polling stopped', 'info', 'vpn');
+      hilog.debug(DOMAIN, TAG, 'disconnect traffic polling stopped');
       await this.destroyVpn();
+      store.appendEvent('Disconnect TUN closed and VPN destroyed', 'info', 'vpn');
       store.update({
         runtimeState: 'idle',
         coreState: 'stopped',
@@ -832,6 +859,7 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
       store.appendEvent('Disconnected');
       hilog.debug(DOMAIN, TAG, 'product disconnect complete');
       try {
+        store.appendEvent('VPN extension stop requested', 'info', 'vpn');
         await vpnExtension.stopVpnExtensionAbility({
           bundleName: BUNDLE_NAME,
           abilityName: VPN_ABILITY_NAME
@@ -1803,23 +1831,158 @@ export default class MihomoPocVpnAbility extends VpnExtensionAbility {
 
   // ---------- Helpers ----------
 
+  private reconcilePersistedRuntimeState(source: string): boolean {
+    const store = new RuntimeStore(this.context.filesDir);
+    const snapshot = store.getSnapshot();
+    const expectsRunning = snapshot.runtimeState === 'connected' || snapshot.coreState === 'running';
+    if (!expectsRunning) {
+      return false;
+    }
+
+    try {
+      const status = pocNative.isMihomoRunning();
+      if (status.ok && status.code === 1) {
+        this.poc04Started = true;
+        if (this.mihomoStartedBy.length === 0) {
+          this.mihomoStartedBy = 'recovered';
+        }
+        hilog.info(DOMAIN, TAG, 'runtime state verified source=%{public}s', source);
+        return true;
+      }
+      hilog.warn(DOMAIN, TAG,
+        'stale runtime state source=%{public}s nativeOk=%{public}s nativeCode=%{public}d message=%{public}s',
+        source, status.ok ? 'true' : 'false', status.code, status.message);
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, 'runtime state verification failed source=%{public}s err=%{public}s',
+        source, this.toErrorText(err));
+    }
+
+    this.poc04Started = false;
+    this.mihomoStartedBy = '';
+    this.tunFd = -1;
+    this.stopTrafficPolling(false);
+    store.update({
+      runtimeState: 'idle',
+      coreState: 'stopped',
+      tunFd: -1,
+      startedAt: 0,
+      uploadSpeed: 0,
+      downloadSpeed: 0,
+      lastError: '',
+      lastEvent: 'Stale VPN runtime state cleared'
+    });
+    store.appendEvent('Stale VPN runtime state cleared after process restart', 'warn', 'vpn');
+    return false;
+  }
+
   private async sleep(ms: number): Promise<void> {
     return new Promise<void>((resolve) => {
       setTimeout(resolve, ms);
     });
   }
 
-  private gracefulStopWithTimeout(timeoutMs: number): Promise<PocStatus> {
-    const timeoutResult: Promise<PocStatus> = new Promise<PocStatus>((resolve: (value: PocStatus) => void) => {
-      setTimeout(() => {
-        resolve({
-          ok: false,
-          code: -1,
-          message: 'graceful stop timed out after ' + timeoutMs.toString() + ' ms'
-        });
-      }, timeoutMs);
-    });
-    return Promise.race<PocStatus>([pocNative.gracefulStopMihomo(), timeoutResult]);
+  private async testMihomoGroupDelayWithTimeout(groupName: string, url: string,
+    timeoutMs: number): Promise<string> {
+    const configService = new ConfigService(this.context.filesDir);
+    const secret = configService.getMihomoControllerSecret();
+    const endpoint = MIHOMO_CONTROLLER_BASE_URL + '/group/' + encodeURIComponent(groupName) + '/delay?url=' +
+      encodeURIComponent(url) + '&timeout=' + timeoutMs.toString() + '&expected=%2A';
+    const request = http.createHttp();
+    try {
+      const response = await request.request(endpoint, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Authorization': 'Bearer ' + secret,
+          'Accept': 'application/json'
+        },
+        connectTimeout: 2000,
+        readTimeout: timeoutMs + 1500,
+        expectDataType: http.HttpDataType.OBJECT
+      });
+      const payload = response.result as Record<string, Object>;
+      if (response.responseCode !== 200) {
+        throw new Error(this.controllerDelayError(response.responseCode, this.controllerErrorDetail(payload)));
+      }
+
+      const delays: NativeDelayItem[] = [];
+      for (const nodeName of Object.keys(payload)) {
+        const value = payload[nodeName];
+        if (typeof value === 'number' && value > 0) {
+          delays.push({
+            name: nodeName,
+            delay: value,
+            ok: true,
+            error: ''
+          });
+        }
+      }
+      if (delays.length === 0) {
+        throw new Error('LATENCY_ALL_NODES_UNAVAILABLE: no valid delay result');
+      }
+      const result: NativeDelayResult = {
+        ok: true,
+        groupName,
+        nodeName: '',
+        url,
+        timeoutMs,
+        delays,
+        error: ''
+      };
+      return JSON.stringify(result);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('LATENCY_')) {
+        throw err;
+      }
+      throw new Error('LATENCY_CORE_UNAVAILABLE: ' + this.toErrorText(err));
+    } finally {
+      try {
+        request.destroy();
+      } catch (_) {
+      }
+    }
+  }
+
+  private controllerErrorDetail(payload: Record<string, Object>): string {
+    const message = payload['message'];
+    if (typeof message === 'string' && message.length > 0) {
+      return message;
+    }
+    return 'HTTP request failed';
+  }
+
+  private controllerDelayError(statusCode: number, detail: string): string {
+    if (statusCode === 400 || statusCode === 404) {
+      return 'LATENCY_CONFIG_INVALID: ' + detail;
+    }
+    if (statusCode === 408 || statusCode === 503 || statusCode === 504) {
+      return 'LATENCY_ALL_NODES_UNAVAILABLE: ' + detail;
+    }
+    if (statusCode === 401 || statusCode === 403) {
+      return 'LATENCY_CORE_UNAVAILABLE: controller authorization failed';
+    }
+    return 'LATENCY_REQUEST_FAILED: HTTP ' + statusCode.toString() + ' ' + detail;
+  }
+
+  private hasSuccessfulDelay(result: NativeDelayResult): boolean {
+    for (const item of result.delays) {
+      if (item.ok && item.delay > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private createFailedDelayResult(groupName: string, url: string, timeoutMs: number,
+    error: string): NativeDelayResult {
+    return {
+      ok: false,
+      groupName,
+      nodeName: '',
+      url,
+      timeoutMs,
+      delays: [],
+      error
+    };
   }
 
   private setPoc06State(next: Poc06State, reason: string): void {

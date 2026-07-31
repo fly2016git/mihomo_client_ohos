@@ -5,10 +5,14 @@ import { ConfigService } from '../config/ConfigService';
 import { SettingsService } from '../settings/SettingsService';
 import { SubscriptionService } from '../subscription/SubscriptionService';
 import { RuntimeStore } from './RuntimeStore';
+import { VpnConnectPolicy, VpnConnectRequestState } from './VpnConnectPolicy';
 import { ProxyRuntimePolicy } from './ProxyRuntimePolicy';
 
 const BUNDLE_NAME = 'com.fly.fluxgate';
 const VPN_ABILITY_NAME = 'MihomoPocVpnAbility';
+const CONNECT_ACK_TIMEOUT_MS = 1200;
+const CONNECT_ACK_POLL_MS = 100;
+const CONNECT_REQUEST_NOT_ACKNOWLEDGED = 'VPN_CONNECT_REQUEST_NOT_ACKNOWLEDGED';
 
 export class VpnControlService {
   private configService: ConfigService;
@@ -44,6 +48,7 @@ export class VpnControlService {
     }
     const rawYaml = this.configService.loadRawYaml(profile.id);
     this.configService.writeTextFile(profile.runtimePath, this.configService.generateRuntimeYaml(rawYaml, settings));
+    const requestedAt = Date.now();
     this.runtimeStore.update({
       runtimeState: 'starting',
       coreState: 'loading',
@@ -60,7 +65,7 @@ export class VpnControlService {
       parameters: {
         command: 'connect',
         profileId: profile.id,
-        requestedAt: new Date().toISOString(),
+        requestedAt: new Date(requestedAt).toISOString(),
         requestedBy: 'ui',
         vpnRouteMode: settings.routeMode,
         vpnDnsAddress: settings.vpnDnsAddress,
@@ -74,8 +79,27 @@ export class VpnControlService {
         logLevel: settings.logLevel
       }
     };
-    await vpnExtension.startVpnExtensionAbility(want);
-    await this.startBackgroundRunning();
+    try {
+      await vpnExtension.startVpnExtensionAbility(want);
+      let requestState = await this.waitForConnectRequestState(profile.id, requestedAt);
+      if (requestState === 'pending') {
+        this.runtimeStore.appendEvent('Connect request retry after VPN authorization', 'warn', 'ui');
+        await vpnExtension.startVpnExtensionAbility(want);
+        requestState = await this.waitForConnectRequestState(profile.id, requestedAt);
+      }
+      if (requestState === 'pending') {
+        throw new Error(CONNECT_REQUEST_NOT_ACKNOWLEDGED);
+      }
+      if (requestState === 'failed') {
+        const snapshot = this.runtimeStore.getSnapshot();
+        throw new Error(snapshot.lastError.length > 0 ? snapshot.lastError : 'VPN_CONNECT_REQUEST_REJECTED');
+      }
+      await this.startBackgroundRunning();
+    } catch (err) {
+      const connectError = err instanceof Error ? err : new Error(this.toErrorText(err));
+      await this.failPendingConnect(profile.id, requestedAt, connectError);
+      throw connectError;
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -112,8 +136,8 @@ export class VpnControlService {
     }
   }
 
-  async requestProxyLatency(requestId: string, profileId: string, groupNames: string[], url: string,
-    timeoutMs: number): Promise<void> {
+  async requestProxyLatency(requestId: string, profileId: string, groupNames: string[], primaryUrl: string,
+    fallbackUrl: string, timeoutMs: number): Promise<void> {
     this.ensureProxyRuntimeReady(profileId, 'Latency test');
     this.configService.saveProxyLatencyState({
       requestId,
@@ -131,7 +155,8 @@ export class VpnControlService {
         requestId,
         profileId,
         groupNames: groupNames.join('\n'),
-        url,
+        primaryUrl,
+        fallbackUrl,
         timeoutMs,
         requestedAt: new Date().toISOString(),
         requestedBy: 'ui'
@@ -173,6 +198,47 @@ export class VpnControlService {
         resolve();
       }, ms);
     });
+  }
+
+  private connectRequestState(profileId: string, requestedAt: number): VpnConnectRequestState {
+    const snapshot = this.runtimeStore.getSnapshot();
+    return VpnConnectPolicy.resolve(snapshot.runtimeState, snapshot.coreState, snapshot.tunFd,
+      snapshot.activeProfileId, profileId, this.runtimeStore.getRuntimeEvents(), requestedAt);
+  }
+
+  private async waitForConnectRequestState(profileId: string, requestedAt: number): Promise<VpnConnectRequestState> {
+    const deadline = Date.now() + CONNECT_ACK_TIMEOUT_MS;
+    let state = this.connectRequestState(profileId, requestedAt);
+    while (state === 'pending' && Date.now() < deadline) {
+      await this.wait(CONNECT_ACK_POLL_MS);
+      state = this.connectRequestState(profileId, requestedAt);
+    }
+    return state;
+  }
+
+  private async failPendingConnect(profileId: string, requestedAt: number, err: Object): Promise<void> {
+    if (this.connectRequestState(profileId, requestedAt) !== 'pending') {
+      return;
+    }
+    const errorText = this.toErrorText(err);
+    this.runtimeStore.update({
+      runtimeState: 'error',
+      coreState: 'stopped',
+      tunFd: -1,
+      lastError: errorText,
+      lastEvent: 'Connect failed'
+    });
+    this.runtimeStore.appendEvent('Connect failed: ' + errorText, 'error', 'ui');
+    try {
+      await vpnExtension.stopVpnExtensionAbility({
+        bundleName: BUNDLE_NAME,
+        abilityName: VPN_ABILITY_NAME
+      });
+    } catch (stopErr) {
+      this.runtimeStore.appendEvent('Unacknowledged VPN extension stop failed: ' + this.toErrorText(stopErr),
+        'warn', 'ui');
+    }
+    await this.stopBackgroundRunning();
   }
 
   private ensureProxyRuntimeReady(profileId: string, operation: string): void {

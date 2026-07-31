@@ -30,16 +30,12 @@ interface PocNativeApi {
   holdTunFdReference(tunFd: number): PocStatus;
   releaseTunFdReference(): PocStatus;
 
-  // MVP-01B: protect hook control + graceful stop
+  // MVP-01B: protect hook control
   enableProtectHook(): PocStatus;
   disableProtectHook(): Promise<PocStatus>;
   isMihomoRunning(): PocStatus;
-  gracefulStopMihomo(): Promise<PocStatus>;
 
   selectProxy(group: string, node: string): Promise<PocStatus>;
-  validateMihomoConfig(content: string): Promise<string>;
-  testMihomoProxyDelay(node: string, url: string, timeoutMs: number): Promise<string>;
-  testMihomoGroupDelay(group: string, url: string, timeoutMs: number): Promise<string>;
   getMihomoTrafficStats(): Promise<string>;
   startMihomoTrafficStatsWriter(statsPath: string): Promise<PocStatus>;
   stopMihomoTrafficStatsWriter(): Promise<PocStatus>;

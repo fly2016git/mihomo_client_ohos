@@ -1,0 +1,20 @@
+# FluxGate offline functional test configuration.
+# Uses Mihomo's built-in DIRECT outbound and requires no proxy server.
+
+mode: rule
+log-level: info
+ipv6: false
+
+proxies: []
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - DIRECT
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+
+
+rules:
+  - MATCH,Proxy

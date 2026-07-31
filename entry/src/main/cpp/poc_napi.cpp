@@ -59,7 +59,6 @@ using MihomoOhosStartConfigFn = int32_t (*)(const char *, const char *, int32_t)
 using MihomoOhosStartConfigFileFn = int32_t (*)(const char *, const char *);
 using MihomoOhosStartConfigFileWithTunFdFn = int32_t (*)(const char *, const char *, int32_t);
 using MihomoOhosStopFn = int32_t (*)();
-using MihomoOhosGracefulStopFn = int32_t (*)();
 using MihomoOhosSetProtectBridgeFn = void (*)(void *fn);
 using MihomoOhosEnableProtectHookFn = int32_t (*)();
 using MihomoOhosDisableProtectHookFn = int32_t (*)();
@@ -103,7 +102,6 @@ struct MihomoCoreApi {
     MihomoOhosStartConfigFileFn startConfigFile = nullptr;
     MihomoOhosStartConfigFileWithTunFdFn startConfigFileWithTunFd = nullptr;
     MihomoOhosStopFn stop = nullptr;
-    MihomoOhosGracefulStopFn gracefulStop = nullptr;
     MihomoOhosSetProtectBridgeFn setProtectBridge = nullptr;
     MihomoOhosEnableProtectHookFn enableProtectHook = nullptr;
     MihomoOhosDisableProtectHookFn disableProtectHook = nullptr;
@@ -581,11 +579,10 @@ bool EnsureMihomoCoreLocked()
         return false;
     }
 
-    // Optional symbols (MVP-01B protect hook control + graceful stop)
+    // Optional symbols (MVP-01B protect hook control)
     LoadSymbol(handle, "MihomoOhosEnableProtectHook", reinterpret_cast<void **>(&next.enableProtectHook));
     LoadSymbol(handle, "MihomoOhosDisableProtectHook", reinterpret_cast<void **>(&next.disableProtectHook));
     LoadSymbol(handle, "MihomoOhosIsRunning", reinterpret_cast<void **>(&next.isRunning));
-    LoadSymbol(handle, "MihomoOhosGracefulStop", reinterpret_cast<void **>(&next.gracefulStop));
     LoadSymbol(handle, "MihomoOhosProxyDelay", reinterpret_cast<void **>(&next.proxyDelay));
     LoadSymbol(handle, "MihomoOhosGroupDelay", reinterpret_cast<void **>(&next.groupDelay));
     LoadSymbol(handle, "MihomoOhosSelectProxy", reinterpret_cast<void **>(&next.selectProxy));
@@ -600,11 +597,10 @@ bool EnsureMihomoCoreLocked()
     next.setProtectBridge(reinterpret_cast<void *>(NapiProtectBridgeImpl));
     g_mihomo = next;
     FluxGateLog(LOG_INFO,
-        "mihomo core loaded and protect bridge registered hooks=%{public}d/%{public}d/%{public}d graceful=%{public}d delay=%{public}d/%{public}d selector=%{public}d validator=%{public}d traffic=%{public}d writer=%{public}d/%{public}d",
+        "mihomo core loaded and protect bridge registered hooks=%{public}d/%{public}d/%{public}d delay=%{public}d/%{public}d selector=%{public}d validator=%{public}d traffic=%{public}d writer=%{public}d/%{public}d",
         next.enableProtectHook != nullptr ? 1 : 0,
         next.disableProtectHook != nullptr ? 1 : 0,
         next.isRunning != nullptr ? 1 : 0,
-        next.gracefulStop != nullptr ? 1 : 0,
         next.proxyDelay != nullptr ? 1 : 0,
         next.groupDelay != nullptr ? 1 : 0,
         next.selectProxy != nullptr ? 1 : 0,
@@ -1765,7 +1761,7 @@ napi_value TestMihomoDelay(napi_env env, napi_callback_info info, bool group)
             "node name must be a non-empty string");
     }
 
-    std::string url = "http://www.gstatic.com/generate_204";
+    std::string url = "https://www.gstatic.com/generate_204";
     if (argc >= 2 && args[1] != nullptr) {
         std::string candidate;
         if (ReadStringArg(env, args[1], &candidate) && !candidate.empty()) {
@@ -1807,22 +1803,22 @@ napi_value TestMihomoDelay(napi_env env, napi_callback_info info, bool group)
                 workData->error = g_mihomo.lastError;
                 return;
             }
-            if (workData->group) {
-                if (g_mihomo.groupDelay == nullptr) {
-                    workData->error = "MihomoOhosGroupDelay not available";
-                    return;
-                }
-                const char *jsonResult = g_mihomo.groupDelay(workData->name.c_str(), workData->url.c_str(),
-                    workData->timeoutMs);
-                workData->result = TakeMihomoStringLocked(jsonResult);
-            } else {
-                if (g_mihomo.proxyDelay == nullptr) {
-                    workData->error = "MihomoOhosProxyDelay not available";
-                    return;
-                }
-                const char *jsonResult = g_mihomo.proxyDelay(workData->name.c_str(), workData->url.c_str(),
-                    workData->timeoutMs);
-                workData->result = TakeMihomoStringLocked(jsonResult);
+            MihomoOhosProxyDelayFn delayFn = workData->group ? g_mihomo.groupDelay : g_mihomo.proxyDelay;
+            if (delayFn == nullptr) {
+                workData->error = workData->group ? "MihomoOhosGroupDelay not available" :
+                    "MihomoOhosProxyDelay not available";
+                return;
+            }
+
+            // Keep all foreign-thread entries into the Go shared runtime serialized. The Go bridge bounds this call.
+            const char *jsonResult = delayFn(workData->name.c_str(), workData->url.c_str(), workData->timeoutMs);
+            if (jsonResult == nullptr) {
+                workData->error = "mihomo delay returned an empty result";
+                return;
+            }
+            workData->result.assign(jsonResult);
+            if (g_mihomo.freeString != nullptr) {
+                g_mihomo.freeString(const_cast<char *>(jsonResult));
             }
         },
         [](napi_env env, napi_status status, void *rawData) {
@@ -2248,66 +2244,6 @@ napi_value IsMihomoRunning(napi_env env, napi_callback_info info)
         running == 1 ? "mihomo running" : "mihomo not running");
 }
 
-// GracefulStopMihomo runs on a NAPI worker thread. The start path initializes
-// mihomo from a worker thread as well; calling exported Go functions from the
-// ArkTS main thread has proven unstable on OpenHarmony.
-napi_value GracefulStopMihomo(napi_env env, napi_callback_info info)
-{
-    (void)info;
-
-    auto *data = new MihomoAsyncData();
-    data->env = env;
-    data->op = "MihomoGracefulStop";
-
-    napi_value promise = nullptr;
-    napi_create_promise(env, &data->deferred, &promise);
-
-    napi_value resourceName = nullptr;
-    napi_create_string_utf8(env, "PocMihomoGracefulStop", NAPI_AUTO_LENGTH, &resourceName);
-
-    napi_status status = napi_create_async_work(
-        env,
-        nullptr,
-        resourceName,
-        [](napi_env env, void *rawData) {
-            (void)env;
-            auto *workData = static_cast<MihomoAsyncData *>(rawData);
-            std::lock_guard<std::mutex> lock(g_mihomoMutex);
-            if (!EnsureMihomoCoreLocked()) {
-                workData->code = -1;
-                workData->ok = false;
-                workData->message = g_mihomo.lastError;
-                return;
-            }
-            if (g_mihomo.gracefulStop == nullptr) {
-                workData->code = -1;
-                workData->ok = false;
-                workData->message = "MihomoOhosGracefulStop not available";
-                return;
-            }
-            FluxGateLog(LOG_INFO,
-                "MVP-01B calling MihomoOhosGracefulStop (async)");
-            int32_t code = g_mihomo.gracefulStop();
-            FluxGateLog(LOG_INFO,
-                "MVP-01B MihomoOhosGracefulStop returned code=%{public}d", code);
-            workData->code = code;
-            workData->ok = code == 0;
-            workData->message = code == 0 ? "mihomo graceful stop ok" : MihomoLastErrorLocked();
-        },
-        CompleteMihomoAsync,
-        data,
-        &data->work
-    );
-
-    if (status != napi_ok || napi_queue_async_work(env, data->work) != napi_ok) {
-        napi_delete_async_work(env, data->work);
-        delete data;
-        return MakeRejectedPromise(env, "failed to queue mihomo graceful stop async work");
-    }
-
-    return promise;
-}
-
 // ---------- Module registration ----------
 
 napi_value Init(napi_env env, napi_value exports)
@@ -2337,11 +2273,7 @@ napi_value Init(napi_env env, napi_value exports)
         { "enableProtectHook", nullptr, EnableProtectHook, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "disableProtectHook", nullptr, DisableProtectHook, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "isMihomoRunning", nullptr, IsMihomoRunning, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "gracefulStopMihomo", nullptr, GracefulStopMihomo, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "testMihomoProxyDelay", nullptr, TestMihomoProxyDelay, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "testMihomoGroupDelay", nullptr, TestMihomoGroupDelay, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "selectProxy", nullptr, SelectMihomoProxy, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "validateMihomoConfig", nullptr, ValidateMihomoConfig, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "getMihomoTrafficStats", nullptr, GetMihomoTrafficStats, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "startMihomoTrafficStatsWriter", nullptr, StartMihomoTrafficStatsWriter, nullptr, nullptr, nullptr,
             napi_default, nullptr },

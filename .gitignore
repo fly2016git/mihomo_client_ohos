@@ -1,7 +1,7 @@
 /node_modules
 /oh_modules
 /local.properties
-/.DS_Store
+**/.DS_Store
 /core/mihomo-python/
 /core/mihomo/
 /design/

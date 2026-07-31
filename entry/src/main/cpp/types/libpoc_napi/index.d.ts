@@ -24,10 +24,7 @@ declare const pocNative: {
   stopMihomo(): Promise<PocStatus>;
   startTunFdReadinessProbe(tunFd: number, durationMs: number): PocStatus;
   startTunFdPollProbe(tunFd: number, durationMs: number): PocStatus;
-  testMihomoProxyDelay(node: string, url: string, timeoutMs: number): Promise<string>;
-  testMihomoGroupDelay(group: string, url: string, timeoutMs: number): Promise<string>;
   selectProxy(group: string, node: string): Promise<PocStatus>;
-  validateMihomoConfig(content: string): Promise<string>;
   getMihomoTrafficStats(): Promise<string>;
   startMihomoTrafficStatsWriter(statsPath: string): Promise<PocStatus>;
   stopMihomoTrafficStatsWriter(): Promise<PocStatus>;

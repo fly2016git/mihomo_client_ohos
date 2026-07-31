@@ -1,4 +1,5 @@
 import fs from '@ohos.file.fs';
+import { util } from '@kit.ArkTS';
 import {
   AppSettings,
   ConfigValidationResult,
@@ -19,6 +20,11 @@ import {
   ProfilesState,
   SubscriptionMeta
 } from '../models/MvpTypes';
+import { ConfigYamlValidator } from './ConfigYamlValidator';
+
+export const MIHOMO_CONTROLLER_BASE_URL = 'http://127.0.0.1:19090';
+
+const MIHOMO_CONTROLLER_SECRET_FILE = 'mihomo-controller-secret.txt';
 
 const DEFAULT_RUNTIME_CONFIG =
   'mixed-port: 0\n' +
@@ -27,6 +33,8 @@ const DEFAULT_RUNTIME_CONFIG =
     'redir-port: 0\n' +
     'tproxy-port: 0\n' +
     'allow-lan: false\n' +
+    'external-controller: 127.0.0.1:19090\n' +
+    'secret: FLUXGATE_CONTROLLER_SECRET\n' +
     'mode: direct\n' +
     'log-level: info\n' +
     'ipv6: false\n' +
@@ -101,6 +109,23 @@ export class ConfigService {
     this.ensureDir(layout.logsDir);
     this.ensureDir(layout.stateDir);
     return layout;
+  }
+
+  getMihomoControllerSecret(): string {
+    const layout = this.ensureLayout();
+    const path = layout.stateDir + '/' + MIHOMO_CONTROLLER_SECRET_FILE;
+    if (this.pathExists(path)) {
+      try {
+        const existing = fs.readTextSync(path).trim();
+        if (/^[A-Za-z0-9-]{32,}$/.test(existing)) {
+          return existing;
+        }
+      } catch (_) {
+      }
+    }
+    const secret = util.generateRandomUUID(false) + util.generateRandomUUID(false);
+    this.writeTextFileAtomic(path, secret);
+    return secret;
   }
 
   ensureDefaultProfile(): Profile {
@@ -200,7 +225,7 @@ export class ConfigService {
 
   validateRawYaml(content: string): ConfigValidationResult {
     const unsupported = this.getUnsupportedConfigKeys(content);
-    const errors: string[] = [];
+    const errors: string[] = ConfigYamlValidator.validate(content);
     const warnings: string[] = [];
     if (content.trim().length === 0) {
       errors.push('配置不能为空');
@@ -253,6 +278,7 @@ export class ConfigService {
     const dnsMode = this.toRuntimeDnsMode(resolvedSettings.dnsMode);
     const ipv6 = resolvedSettings.ipv6Enabled ? 'true' : 'false';
     return DEFAULT_RUNTIME_CONFIG
+      .replace('FLUXGATE_CONTROLLER_SECRET', this.getMihomoControllerSecret())
       .replace('mode: direct\n', 'mode: ' + safeMode + '\n')
       .replace('log-level: info\n', 'log-level: ' + logLevel + '\n')
       .replace('ipv6: false\n', 'ipv6: ' + ipv6 + '\n')
