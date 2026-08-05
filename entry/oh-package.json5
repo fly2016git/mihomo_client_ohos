@@ -4,7 +4,7 @@
   "description": "Please describe the basic information.",
   "main": "",
   "author": "",
-  "license": "",
+  "license": "GPL-3.0-only",
   "devDependencies": {
     "@types/libpoc_napi.so": "file:./src/main/cpp/types/libpoc_napi"
   },

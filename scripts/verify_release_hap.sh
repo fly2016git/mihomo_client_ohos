@@ -5,6 +5,13 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HAP_PATH="${1:-$ROOT_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap}"
 GEOIP_ENTRY='resources/rawfile/geoip.metadb'
 EXPECTED_GEOIP_SHA256='79a59a337d942c9dd8874ae64028024f9f4461452a4db4eee9697f9faeab1340'
+LEGAL_ENTRIES=(
+  'resources/rawfile/gpl-3.0.txt'
+  'resources/rawfile/third_party_notices.txt'
+  'resources/rawfile/third_party_licenses.txt'
+  'resources/rawfile/modifications.txt'
+  'resources/rawfile/source_code.txt'
+)
 
 if [ ! -f "$HAP_PATH" ]; then
   echo "release HAP not found: $HAP_PATH" >&2
@@ -58,6 +65,31 @@ fi
 geoip_sha256="$(unzip -p "$HAP_PATH" "$GEOIP_ENTRY" | shasum -a 256 | awk '{print $1}')"
 if [ "$geoip_sha256" != "$EXPECTED_GEOIP_SHA256" ]; then
   echo 'release HAP has a missing or unexpected geoip.metadb' >&2
+  exit 1
+fi
+
+for legal_entry in "${LEGAL_ENTRIES[@]}"; do
+  if ! unzip -p "$HAP_PATH" "$legal_entry" | grep '[^[:space:]]' >/dev/null; then
+    echo "release HAP is missing legal resource: $legal_entry" >&2
+    exit 1
+  fi
+
+  legal_source="$ROOT_DIR/entry/src/main/resources/rawfile/${legal_entry##*/}"
+  packaged_sha256="$(unzip -p "$HAP_PATH" "$legal_entry" | shasum -a 256 | awk '{print $1}')"
+  source_sha256="$(shasum -a 256 "$legal_source" | awk '{print $1}')"
+  if [[ "$packaged_sha256" != "$source_sha256" ]]; then
+    echo "release HAP contains a stale legal resource: $legal_entry" >&2
+    exit 1
+  fi
+done
+
+if ! unzip -p "$HAP_PATH" resources/rawfile/gpl-3.0.txt | grep 'GNU GENERAL PUBLIC LICENSE' >/dev/null; then
+  echo 'release HAP does not contain the GNU GPL text' >&2
+  exit 1
+fi
+
+if ! unzip -p "$HAP_PATH" resources/rawfile/source_code.txt | grep 'github.com/fly2016git/mihomo_client_ohos' >/dev/null; then
+  echo 'release HAP does not identify the corresponding source location' >&2
   exit 1
 fi
 

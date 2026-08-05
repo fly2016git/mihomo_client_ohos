@@ -19,6 +19,9 @@ echo "== diff checks =="
 git -C "$ROOT_DIR" diff --check -- . ':(exclude)patches/*.patch'
 git -C "$ROOT_DIR/core/mihomo" diff --check
 
+echo "== license compliance =="
+"$ROOT_DIR/scripts/verify_legal_compliance.sh"
+
 echo "== local unit tests =="
 "$ROOT_DIR/scripts/run_local_unit_tests.sh"
 

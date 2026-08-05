@@ -24,10 +24,15 @@ scripts/build_release_hap.sh
 
 ## Required Checks
 
-- Review `PRIVACY.md`, `THIRD_PARTY_NOTICES.md`, and dependency licenses.
+- Review `PRIVACY.md`, `THIRD_PARTY_NOTICES.md`, `MODIFICATIONS.md`, `SOURCE_CODE.md`, and dependency licenses.
+- Run `scripts/generate_third_party_licenses.sh`, then confirm `scripts/verify_legal_compliance.sh` passes.
 - Confirm the bundled `geoip.metadb` source, license notice, and SHA-256 before updating it.
 - Run `scripts/run_release_gate.sh`.
+- Build the AppGallery `.app`, then run `scripts/verify_release_app.sh <path-to-app>` against the exact upload artifact.
 - Run local device regression against the release-mode code using a device-compatible development profile.
 - Install the exact AppGallery-signed HAP through an AppGallery internal-test release before production rollout.
 - Confirm VPN consent, connection, disconnection, subscription update, configuration import, and foreground/background restoration manually.
-- Publish the corresponding source code and release tag as required by AGPL-3.0 and GPL-3.0.
+- Confirm the `.app` contains the GPL text, third-party notices and licenses, modification record, and corresponding-source instructions.
+- Publish the complete corresponding source and a signed release tag matching the version before making the binary public, as required by GPL-3.0.
+- Put the matching release/tag source URL in the AppGallery product or version description so binary recipients can find it without searching.
+- Keep the release source, build scripts, HarmonyOS shims, runtime patch, and dependency lock files available for as long as the binary is distributed.

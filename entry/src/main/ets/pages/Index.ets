@@ -39,7 +39,7 @@ import { VpnControlService } from '../runtime/VpnControlService';
 
 const DOMAIN = 0x0001;
 const TAG = 'MihomoMvpPage';
-const CURRENT_AGREEMENT_VERSION = '2026-07-29';
+const CURRENT_AGREEMENT_VERSION = '2026-08-05';
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
 const IMPORT_READ_CHUNK_BYTES = 64 * 1024;
 
@@ -97,6 +97,8 @@ struct Index {
   @State renderTick: number = 0;
   @State pageTransitionOpacity: number = 1;
   @State pageTransitionScale: number = 1;
+  @State legalDocumentTitle: string = '开源许可证';
+  @State legalDocumentText: string = '';
 
   private configService?: ConfigService;
   private configValidationService?: ConfigValidationService;
@@ -508,6 +510,9 @@ struct Index {
     }
     if (this.selectedSectionIndex === 10) {
       return '用户协议';
+    }
+    if (this.selectedSectionIndex === 11) {
+      return this.legalDocumentTitle;
     }
     return '首页';
   }
@@ -1541,6 +1546,23 @@ struct Index {
     } finally {
       fs.closeSync(file);
     }
+  }
+
+  private openLegalDocument(title: string, rawFileName: string): void {
+    this.legalDocumentTitle = title;
+    this.legalDocumentText = '正在加载...';
+    this.selectSection(11);
+    const manager = this.uiContext?.resourceManager;
+    if (!manager) {
+      this.legalDocumentText = '无法读取法律文件，请稍后重试。';
+      return;
+    }
+    manager.getRawFileContent(rawFileName).then((content: Uint8Array) => {
+      const decoder = util.TextDecoder.create('utf-8');
+      this.legalDocumentText = decoder.decodeToString(content);
+    }).catch((_err: Error) => {
+      this.legalDocumentText = '法律文件缺失或读取失败，请通过源代码仓库查看。';
+    });
   }
 
   private async scanAndCreateSubscription(): Promise<void> {
@@ -2824,6 +2846,8 @@ struct Index {
       this.DiagnosticsPage()
     } else if (this.selectedSectionIndex === 10) {
       this.AgreementPage()
+    } else if (this.selectedSectionIndex === 11) {
+      this.LegalDocumentPage()
     }
   }
 
@@ -3955,7 +3979,21 @@ struct Index {
         this.SettingsActionRow('用户服务协议', '版本 ' + CURRENT_AGREEMENT_VERSION, '查看', () => {
           this.selectSection(10);
         })
-        this.DiagCard('开源许可', 'FluxGate：GNU AGPL v3', 'mihomo 核心：GNU GPL v3')
+        this.SettingsActionRow('开源许可证', 'FluxGate 与 mihomo：GNU GPL v3', '查看', () => {
+          this.openLegalDocument('GNU GPL v3', 'gpl-3.0.txt');
+        })
+        this.SettingsActionRow('第三方软件声明', '组件来源、版本与许可证概览', '查看', () => {
+          this.openLegalDocument('第三方软件声明', 'third_party_notices.txt');
+        })
+        this.SettingsActionRow('第三方许可证', '依赖组件版权声明与许可全文', '查看', () => {
+          this.openLegalDocument('第三方许可证', 'third_party_licenses.txt');
+        })
+        this.SettingsActionRow('修改说明', 'Mihomo 与 OpenHarmony 适配记录', '查看', () => {
+          this.openLegalDocument('修改说明', 'modifications.txt');
+        })
+        this.SettingsActionRow('对应源码', '按应用版本 Tag 获取完整源码', '查看', () => {
+          this.openLegalDocument('对应源码', 'source_code.txt');
+        })
         this.DiagCard('版权与担保', '© 2026 FluxGate contributors', '本软件按“原样”提供，不附带任何担保。')
         this.DiagCard('源代码', 'github.com/fly2016git/mihomo_client_ohos',
           '完整隐私政策：仓库根目录 PRIVACY.md')
@@ -4026,7 +4064,7 @@ struct Index {
         '您不得利用 FluxGate 从事违法违规或侵害他人合法权益的活动，包括危害国家或公共安全，非法侵入、攻击或破坏信息系统，制作或传播恶意程序，非法处理个人信息，侵犯知识产权、商业秘密或隐私，传播违法有害内容，绕过依法实施的安全措施，未经授权进行网络扫描、压力测试或流量攻击，以及诈骗、洗钱、赌博等行为。' +
           '\n\n如您违反本条约定，由此造成的责任和损失由您自行承担；如给我们或第三方造成损失，您还应依法承担赔偿责任。')
       this.AgreementSection('8. 知识产权、开源许可及协议修订',
-        '8.1 FluxGate 的源代码及部分组件依据相应开源许可证提供。使用、复制、修改或分发相关代码时，应遵守 AGPL-3.0、GPL-3.0 及其他第三方开源许可证要求。' +
+        '8.1 FluxGate 的源代码依据 GPL-3.0-only 提供，Mihomo 核心及其他组件依据各自的开源许可证提供。使用、复制、修改或分发相关代码时，应遵守 GPL-3.0 及相应第三方开源许可证要求。本协议不限制开源许可证明确授予您的权利。' +
           '\n\n8.2 FluxGate 名称、图标、界面设计及其他未明确按照开源许可证授权的内容，其合法权益归相应权利人所有。' +
           '\n\n8.3 我们可能根据功能、安全或法律法规变化修订本协议。重大变更将采用合理方式提示您重新阅读和确认。' +
           '\n\n如果您不同意修订后的协议，应停止使用本应用；您在协议生效后继续使用，即视为接受修订后的协议。')
@@ -4056,6 +4094,33 @@ struct Index {
           .fontColor(this.mutedText())
           .width('100%')
         this.AgreementContent()
+      }
+      .width('100%')
+      .constraintSize({ minHeight: '100%' })
+      .padding({ left: 20, right: 20, bottom: 28 })
+      .alignItems(HorizontalAlign.Start)
+    }
+    .scrollable(ScrollDirection.Vertical)
+    .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .layoutWeight(1)
+    .width('100%')
+    .backgroundColor(this.appBg())
+  }
+
+  @Builder LegalDocumentPage() {
+    Scroll() {
+      Column({ space: 12 }) {
+        Text(this.legalDocumentTitle)
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(this.primaryText())
+          .width('100%')
+        Text(this.legalDocumentText)
+          .fontSize(12)
+          .lineHeight(19)
+          .fontColor(this.secondaryText())
+          .width('100%')
       }
       .width('100%')
       .constraintSize({ minHeight: '100%' })

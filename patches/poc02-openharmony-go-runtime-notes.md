@@ -1,14 +1,33 @@
 # POC-02 OpenHarmony Go Runtime Patch Notes
 
-POC-02 passed on device `192.168.3.65:41235` only after applying these local runtime changes to the temporary OpenHarmony Go tree at `/private/tmp/ohos_golang_go`.
+POC-02 passed on a physical HarmonyOS device only after applying these runtime changes to the OpenHarmony Go source tree.
 
 This file records the minimal change set that matters. Earlier diagnostic runtime logging has been removed from the temporary tree; the remaining items below are the functional changes that should be preserved in a long-lived fork or patch set.
 
 ## Toolchain
 
-- Go tree: `/private/tmp/ohos_golang_go`
-- Go binary: `/private/tmp/ohos_golang_go/bin/go`
+- Upstream: <https://gitee.com/openharmony-sig/ohos_golang_go>
+- Base commit: `ccab16a688b9331d0911016aee0e8a30a05fe2c8`
+- Reported Go version: `go1.22.10`
+- Local Go tree: set `OHOS_GO_ROOT` to any checkout of the base commit
+- Go binary after bootstrap: `$OHOS_GO_ROOT/bin/go`
 - Build env file: `scripts/huawei_tools_env.sh`
+
+The similarly named upstream tag `2024-12-17_11_42_27/github.com/golang/go/release-branch.go1.22` is not the correct base: it predates the OpenHarmony runtime integration required by this patch.
+
+## Reproduction
+
+```bash
+git clone https://gitee.com/openharmony-sig/ohos_golang_go.git
+cd ohos_golang_go
+git checkout ccab16a688b9331d0911016aee0e8a30a05fe2c8
+/path/to/FluxGate/scripts/verify_toolchain_patch.sh "$PWD"
+git apply --unidiff-zero /path/to/FluxGate/patches/poc02-openharmony-go-runtime.patch
+cd src
+GOROOT_BOOTSTRAP=/path/to/bootstrap-go ./make.bash
+```
+
+Set `OHOS_GO` to the resulting `bin/go` before running `scripts/build_poc04_mihomo_core.sh`.
 
 ## Required Runtime Changes
 
@@ -130,8 +149,8 @@ POC-02 self-test panicProbe ok=true code=0 message=panic converted to error even
 POC-02 self-test done failures=0
 ```
 
-## Follow-up
+## Maintenance
 
-- Convert `/private/tmp/ohos_golang_go` into a maintainable fork, patch set, or internal toolchain build script before depending on it for the full mihomo port.
-- Keep only the functional runtime changes above in the long-lived version.
-- Use `IsOpenharmony` for runtime conditionals. In this toolchain the runtime `GOOS` constant may still be `"linux"` on OpenHarmony paths.
+- Verify the patch against the fixed base with `scripts/verify_toolchain_patch.sh` before every release.
+- Keep only the functional runtime changes above in the maintained patch.
+- Use `IsOpenharmony` for runtime conditionals. In this toolchain the runtime `GOOS` constant is `"linux"` on OpenHarmony paths.

@@ -66,6 +66,8 @@ scripts/build_release_hap.sh
 ```bash
 /Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw \
   assembleApp -p product=default -p buildMode=release --no-daemon
+
+scripts/verify_release_app.sh build/outputs/default/MyApplication-default-unsigned.app
 ```
 
 Release 构建前需在 DevEco Studio 中配置有效的正式证书和 Release Provision Profile。请勿将证书、私钥或密码提交到仓库。
@@ -76,7 +78,10 @@ Release 构建前需在 DevEco Studio 中配置有效的正式证书和 Release 
 - [隐私政策](PRIVACY.md)
 - [用户服务协议](TERMS.md)
 - [第三方软件声明](THIRD_PARTY_NOTICES.md)
+- [第三方许可证全文](entry/src/main/resources/rawfile/third_party_licenses.txt)
+- [修改记录](MODIFICATIONS.md)
+- [对应源码说明](SOURCE_CODE.md)
 
 ## 许可证
 
-本项目采用 [GNU AGPL-3.0](LICENSE) 许可证。Mihomo 及其他第三方组件同时受其各自许可证约束。
+FluxGate 采用 [GNU GPL-3.0-only](LICENSE) 许可证。Mihomo 及其他第三方组件仍受各自许可证约束。此前已经按照 AGPL-3.0 发布的版本继续适用其发布时附带的许可条款。

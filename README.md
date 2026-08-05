@@ -66,6 +66,8 @@ Build an `.app` package for AppGallery:
 ```bash
 /Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw \
   assembleApp -p product=default -p buildMode=release --no-daemon
+
+scripts/verify_release_app.sh build/outputs/default/MyApplication-default-unsigned.app
 ```
 
 Before building a release package, configure a valid release certificate and Release Provision Profile in DevEco Studio. Never commit certificates, private keys, or passwords to the repository.
@@ -76,7 +78,10 @@ Before building a release package, configure a valid release certificate and Rel
 - [Privacy policy](PRIVACY.md)
 - [Terms of service](TERMS.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Third-party license texts](entry/src/main/resources/rawfile/third_party_licenses.txt)
+- [Modification record](MODIFICATIONS.md)
+- [Corresponding source information](SOURCE_CODE.md)
 
 ## License
 
-This project is licensed under the [GNU AGPL-3.0](LICENSE). Mihomo and other third-party components are also subject to their respective licenses.
+FluxGate is licensed under the [GNU GPL-3.0-only](LICENSE). Mihomo and other third-party components remain subject to their respective licenses. Versions previously released under AGPL-3.0 remain available under the license terms that accompanied those versions.
