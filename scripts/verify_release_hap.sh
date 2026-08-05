@@ -36,7 +36,7 @@ assert_manifest '.app.bundleName == "com.fly.fluxgate"' \
   'release HAP has an unexpected bundle name'
 assert_manifest '.app.vendor == "fly2016"' \
   'release HAP has an unexpected vendor'
-assert_manifest '.app.versionName == "1.0.2" and .app.versionCode == 1000002' \
+assert_manifest '.app.versionName == "1.0.3" and .app.versionCode == 1000003' \
   'release HAP has an unexpected version'
 assert_manifest '.app.targetAPIVersion == 60101024 and .app.minAPIVersion == 50000012' \
   'release HAP has an unexpected target or minimum API version'

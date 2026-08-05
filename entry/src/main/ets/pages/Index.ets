@@ -3695,7 +3695,7 @@ struct Index {
         this.SettingsActionRow('帮助', '配置、连接与诊断说明', '查看', () => {
           this.selectSection(6);
         })
-        this.SettingsActionRow('FluxGate', 'v1.0.2', '关于', () => {
+        this.SettingsActionRow('FluxGate', 'v1.0.3', '关于', () => {
           this.selectSection(7);
         })
         this.SettingsGroup('存储')
@@ -3973,7 +3973,7 @@ struct Index {
   @Builder AboutPage() {
     Scroll() {
       Column({ space: 12 }) {
-        this.DiagCard('FluxGate', '版本 1.0.2', '基于 mihomo 的 HarmonyOS VPN 客户端')
+        this.DiagCard('FluxGate', '版本 1.0.3', '基于 mihomo 的 HarmonyOS VPN 客户端')
         this.DiagCard('隐私政策', '应用不收集账号、设备标识或使用统计。',
           '订阅地址仅用于用户主动更新；诊断文件仅在用户主动操作时生成。')
         this.SettingsActionRow('用户服务协议', '版本 ' + CURRENT_AGREEMENT_VERSION, '查看', () => {

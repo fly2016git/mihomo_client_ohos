@@ -31,7 +31,7 @@ assert_pack_info() {
 
 assert_pack_info '.summary.app.bundleName == "com.fly.fluxgate"' \
   'release APP has an unexpected bundle name'
-assert_pack_info '.summary.app.version.name == "1.0.2" and .summary.app.version.code == 1000002' \
+assert_pack_info '.summary.app.version.name == "1.0.3" and .summary.app.version.code == 1000003' \
   'release APP has an unexpected version'
 assert_pack_info '[.packages[] | select(.name == "entry-default" and .moduleType == "entry")] | length == 1' \
   'release APP does not contain the expected entry package'

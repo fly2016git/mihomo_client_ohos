@@ -12,8 +12,6 @@ The ArkTS application uses `yaml` version 2.8.0, distributed under the ISC licen
 
 The native library includes the Go runtime from the OpenHarmony Go toolchain based on commit `ccab16a688b9331d0911016aee0e8a30a05fe2c8`. The Go Authors' BSD license and the FluxGate runtime modifications are included with the application and source distribution.
 
-The native core currently includes `github.com/rasky/go-lzo`, whose upstream project describes the code as GPL version 2. GPL-2.0-only and GPL-3.0-only terms may be incompatible when this dependency is distributed as part of the combined application. The project owner has explicitly chosen to retain this dependency and accept this unresolved license-compliance risk. This disclosure does not represent that the incompatibility has been resolved. Its notice and license text are reproduced in the bundled third-party license file.
-
 Source code for this application is available at:
 
 <https://github.com/fly2016git/mihomo_client_ohos>

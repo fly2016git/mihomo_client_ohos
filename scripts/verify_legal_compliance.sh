@@ -31,8 +31,10 @@ cmp "$ROOT_DIR/SOURCE_CODE.md" "$RAW_DIR/source_code.txt"
 grep -q 'GNU GENERAL PUBLIC LICENSE' "$ROOT_DIR/LICENSE"
 grep -q 'GPL-3.0-only' "$ROOT_DIR/README.md"
 grep -q 'GPL-3.0-only' "$ROOT_DIR/entry/oh-package.json5"
-grep -q 'github.com/rasky/go-lzo' "$ROOT_DIR/THIRD_PARTY_NOTICES.md"
-grep -q 'accept this unresolved license-compliance risk' "$ROOT_DIR/THIRD_PARTY_NOTICES.md"
+if grep -q 'github.com/rasky/go-lzo\|accept this unresolved license-compliance risk' "$ROOT_DIR/THIRD_PARTY_NOTICES.md"; then
+  echo 'third-party notices still contain the removed go-lzo disclosure' >&2
+  exit 1
+fi
 grep -q 'github.com/fly2016git/mihomo_client_ohos' "$ROOT_DIR/SOURCE_CODE.md"
 
 go_mod_sha256="$(shasum -a 256 "$ROOT_DIR/core/mihomo/go.mod" | awk '{print $1}')"

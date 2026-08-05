@@ -4,7 +4,7 @@ English | [简体中文](README_CN.md)
 
 FluxGate is a Mihomo-based VPN client for HarmonyOS. It imports Mihomo YAML configurations and routes network traffic through the system VPN service.
 
-Current version: `v1.0.2`
+Current version: `v1.0.3`
 
 Bundle name: `com.fly.fluxgate`
 

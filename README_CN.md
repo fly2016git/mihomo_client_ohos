@@ -4,7 +4,7 @@
 
 FluxGate 是一款基于 Mihomo 的 HarmonyOS VPN 客户端，支持导入 Mihomo YAML 配置并通过系统 VPN 接管网络流量。
 
-当前版本：`v1.0.2`
+当前版本：`v1.0.3`
 
 应用包名：`com.fly.fluxgate`
 

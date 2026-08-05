@@ -4,7 +4,7 @@ FluxGate corresponding source is available without charge at:
 
 <https://github.com/fly2016git/mihomo_client_ohos>
 
-For each public binary, use the Git tag matching the application version, for example `v1.0.2`. The tag contains the FluxGate application source, the modified Mihomo source, OpenHarmony bridge and shims, dependency lock files, runtime patch, and build and verification scripts needed to produce the covered components.
+For each public binary, use the Git tag matching the application version, for example `v1.0.3`. The tag contains the FluxGate application source, the modified Mihomo source, OpenHarmony bridge and shims, dependency lock files, runtime patch, and build and verification scripts needed to produce the covered components.
 
 Release page:
 
